@@ -1,0 +1,2441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>learning from nature · hello fall</title>
+<meta name="description" content="An autumn beech wood seen from the ground. The camera flies up through the canopy into the sky, where it says hello fall.">
+<link rel="canonical" href="https://mudranagda.github.io/learning-from-nature/">
+<meta property="og:title" content="learning from nature · hello fall">
+<meta property="og:description" content="An autumn beech wood seen from the ground. The camera flies up through the canopy into the sky, where it says hello fall.">
+<meta property="og:url" content="https://mudranagda.github.io/learning-from-nature/">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap">
+<style>
+  /* One committed visual world: an autumn beech wood seen from the ground.
+     No light/dark split; every colour is painted explicitly. */
+  :root {
+    --sky: #2a7ce0;
+    --ink: #2a1d14;
+    --paper: #f6ecd9;
+    --ui: rgba(255, 255, 255, 0.75); /* text and controls: white on blue, deep sky blue on the wash */
+  }
+  /* The hero layers are all fixed to the viewport. The page scrolls over a tall
+     track: that scroll distance is what turns the sky from blue to white. The
+     rest of the site goes in <main class="site">, which slides up over the hero. */
+  html.locked, html.locked body { overflow: hidden; } /* no scrolling until the flight has landed */
+  body {
+    margin: 0;
+    background: var(--sky);
+    color: var(--paper);
+    overflow-x: hidden;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* the faded-print grade, warm wash, light leak and grain are all applied inside
+       the WebGL drawing (see "finishing pass"), not as page layers: stacked
+       blend-mode layers over a large canvas were costing more than the forest itself */
+  }
+  /* loose leaves drifting across the frame once the camera reaches the treetops.
+     The canvas sits above the white-out layer and above the words, so leaves keep
+     falling over the white and pass in front of the text. */
+  .leaf {
+    position: fixed;
+    inset: 0;
+    z-index: 6;               /* over the white site too: the leaves fall the whole length of the page */
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  /* painterly finish: paper grain + a warm vignette pulling the corners in,
+     the way the photo's edges fall into shadowed foliage */
+  .grain, .wash, .leak, .vignette, .flash {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+  }
+  /* live film grain: a noise canvas redrawn ~24 times a second */
+  .grain {
+    width: 100%;
+    height: 100%;
+    opacity: 0.3;
+    /* hard-light, not overlay: overlay does nothing over white, hard-light still
+       lets the dark specks through, so the grain carries onto the wash */
+    mix-blend-mode: hard-light;
+    image-rendering: pixelated; /* keeps coarser grain crisp when its size is turned up */
+  }
+  /* lifted blacks and a faded amber cast, like an old colour print */
+  .wash {
+    background: linear-gradient(180deg, rgba(255, 214, 150, 0.16), rgba(255, 190, 120, 0.1));
+    mix-blend-mode: screen;
+  }
+  /* a slow light leak drifting in from one corner */
+  .leak {
+    background: radial-gradient(ellipse 60% 50% at 88% 10%, rgba(255, 150, 60, 0.42) 0%, rgba(255, 120, 50, 0.12) 40%, rgba(255, 100, 40, 0) 70%);
+    mix-blend-mode: screen;
+    opacity: 0.55;
+    animation: leak 14s ease-in-out infinite alternate;
+  }
+  @keyframes leak {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(-6%, 8%) scale(1.15); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .leak { animation: none; }
+  }
+  .vignette {
+    background: radial-gradient(ellipse 78% 72% at 50% 50%, rgba(60, 30, 10, 0) 55%, rgba(60, 30, 10, 0.42) 100%);
+    transition: opacity 1.4s ease;
+  }
+  .vignette { opacity: var(--vig, 1); }
+  .vignette.lift { opacity: 0; }
+  /* the white-out at the top of the flight, then the return to the ground */
+  .flash {
+    background: #fbfaf4;
+    opacity: 0;
+    transition: opacity 0.4s ease; /* only the fade back out on replay */
+  }
+  .flash.on { transition: none; } /* while flying, its opacity is driven per frame */
+  /* one line of guidance in the centre of the sky */
+  .msg {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    margin: 0;
+    padding: 0 max(24px, calc(50% - 330px)); /* keeps the longer line to a readable measure */
+    text-wrap: balance;
+    pointer-events: none;
+    font: 400 16px/1.55 'Inter', system-ui, -apple-system, sans-serif;
+    letter-spacing: 0.005em;
+    color: var(--ui);
+    text-align: center;
+    opacity: 0;
+    transform: scale(0.5);             /* grows from half size into view */
+    transition: opacity 1.1s ease, transform 1.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .msg .sub { display: block; }   /* the second line, same size and weight as the first */
+  .msg.show { opacity: 1; transform: scale(1); }
+  @media (prefers-reduced-motion: reduce) {
+    .msg { transform: none; transition: opacity 0.5s ease; }
+  }
+  .track { height: 200vh; }  /* the hero's screen plus one more of sky to scroll into, and back up out of */
+  .site {
+    position: relative;
+    z-index: 5;               /* above every fixed hero layer */
+    background: none;         /* the sky stays behind the whole page */
+    color: rgba(255, 255, 255, 0.92);
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  #grainWhite { z-index: 7; }  /* the same grain carries on over the site and the leaves */
+  /* work: a short, plain list on the sky; the leaves keep falling over it */
+  .work { box-sizing: border-box; max-width: 720px; margin: 0 auto; padding: 18vh max(24px, 6vw) 22vh; }
+  .work h2, .work h3 { margin: 0; font: 500 11px/1.4 'Inter', system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.7; }
+  .work ol { list-style: none; margin: 0; padding: 0; }
+  .work li { display: grid; grid-template-columns: 9.5em 1fr; gap: 6px 32px; padding: 26px 0; border-top: 0.5px solid rgba(255, 255, 255, 0.16); }
+  .work li:last-child { border-bottom: 0.5px solid rgba(255, 255, 255, 0.16); }
+  .work a { color: inherit; text-decoration: none; font: 500 13px/1.6 'Inter', system-ui, sans-serif; }
+  .work a:hover, .work a:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+  .work li a::after { content: '\2197'; margin-left: 5px; font-size: 11px; opacity: 0.55; }
+  .work p { margin: 0; font: 400 13px/1.6 'Inter', system-ui, sans-serif; opacity: 0.8; }
+  /* the site's few links: a quiet row at the top right, there once the flight has landed */
+  .menu {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 8;
+    display: flex;
+    gap: 26px;
+    padding: 22px 28px;
+    font: 500 12px/1 'Inter', system-ui, sans-serif;
+    color: var(--ui);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 1.1s ease;
+  }
+  .menu a { color: inherit; text-decoration: none; }
+  .menu a:hover, .menu a:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+  .menu.show { opacity: 1; pointer-events: auto; }
+  @media (max-width: 560px) { .work li { grid-template-columns: 1fr; gap: 2px; } }
+  /* footer: a raked-up pile of leaves on the ground, and whatever falls onto it */
+  .foot { position: relative; min-height: max(78vh, 460px); overflow: hidden; }
+  .foot canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  /* the one link in the footer: X, bottom left, mirroring the sound button on the right */
+  .social { position: absolute; left: 20px; bottom: 16px; z-index: 2; color: #02387A; opacity: 0.8; transition: opacity 0.2s ease; }
+  .social:hover, .social:focus-visible { opacity: 1; }
+  .social svg { display: block; width: 18px; height: 18px; }
+  .social:focus-visible { outline: 1px solid currentColor; outline-offset: 4px; }
+  /* small cue that the page continues, shown once the flight has landed */
+  .scrollcue {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 18px 24px;
+    line-height: 0;
+    color: var(--ui);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+  }
+  .scrollcue svg { display: block; width: 14px; height: 14px; animation: nudge 2.6s ease-in-out infinite; }
+  .scrollcue.show { opacity: 0.75; } /* a quarter quieter than the text */
+  @keyframes nudge { 0%, 100% { transform: translateY(-2px); } 50% { transform: translateY(3px); } }
+  @media (prefers-reduced-motion: reduce) { .scrollcue svg { animation: none; } }
+  /* sound on / off, bottom right; stays above the white site as it scrolls in */
+  .sound {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    z-index: 8;
+    margin: 0;
+    padding: 16px 20px;
+    border: 0;
+    background: none;
+    line-height: 0;
+    color: var(--ui);
+    cursor: pointer;
+  }
+  .sound svg { display: block; width: 16px; height: 16px; }
+  .sound .waves { transition: opacity 0.3s ease; }
+  .sound .slash { opacity: 0; transition: opacity 0.3s ease; }
+  .sound.off .waves { opacity: 0; }
+  .sound.off .slash { opacity: 1; }
+  /* plain text button on the bottom edge, shown once the flight is over */
+  .replay {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 18px 24px;
+    border: 0;
+    background: none;
+    font: 500 12px/1 'Inter', system-ui, -apple-system, sans-serif;
+    letter-spacing: 0.01em;
+    color: var(--ui);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+  }
+  .replay.show { opacity: 1; pointer-events: auto; }
+  .replay:focus-visible, .sound:focus-visible, .zoom input:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+  /* camera height: a hairline on the right edge with snapped stops */
+  .zoom {
+    position: fixed;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    height: 150px;
+    color: var(--ui);
+    font: 500 10px/1 'Inter', system-ui, -apple-system, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .zoom ol {
+    list-style: none;
+    margin: 0;
+    padding: 1px 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    text-align: right;
+    opacity: 0.8;
+  }
+  .zoom[hidden] { display: none; }
+  .zoom.off { opacity: 0.35; pointer-events: none; }
+  .zoom { transition: opacity 0.4s ease; }
+  .zoom input {
+    -webkit-appearance: none;
+    appearance: none;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 14px;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    background: linear-gradient(currentColor, currentColor) center / 1px 100% no-repeat;
+    cursor: pointer;
+  }
+  .zoom input::-webkit-slider-runnable-track { background: transparent; }
+  .zoom input::-moz-range-track { background: transparent; }
+  .zoom input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: currentColor;
+    border: 0;
+  }
+  .zoom input::-moz-range-thumb {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: currentColor;
+    border: 0;
+  }
+
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="vignette"></div>
+<div class="flash" id="flash"></div>
+<p class="msg" id="msg"></p>
+<canvas class="leaf" id="leaf"></canvas>
+<div class="grain" id="grainWhite" style="mix-blend-mode: normal; opacity: 0; display: none" aria-hidden="true"></div>
+<p class="scrollcue" id="scrollcue" aria-hidden="true"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v11M2.5 8 7 12.5 11.5 8"/></svg></p>
+<button class="replay" id="replay" type="button">replay</button>
+<nav class="menu" id="menu" aria-label="Site"></nav>
+<button class="sound off" id="sound" type="button" aria-label="Sound" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6v4h2.5L8 13V3L4.5 6H2z" fill="currentColor" stroke-width="1"/><g class="waves"><path d="M10.5 5.8a3 3 0 0 1 0 4.4"/><path d="M12.4 3.9a5.7 5.7 0 0 1 0 8.2"/></g><path class="slash" d="M10.6 6 14.4 10M14.4 6 10.6 10"/></svg></button>
+<!-- the height slider is hidden for now: remove the "hidden" attribute to bring it back -->
+<label class="zoom" id="zoom" hidden aria-label="Camera height, as a percentage of tree height">
+  <ol aria-hidden="true"><li>125</li><li>100</li><li>75</li><li>50</li><li>25</li><li>0</li></ol>
+  <input id="zoomRange" type="range" min="0" max="125" step="1" value="50" aria-valuetext="50%">
+</label>
+
+<div class="track" aria-hidden="true"></div>
+<!-- The rest of the site (projects, case studies) goes here. It sits on the same
+     white the sky turns into, and scrolls up over the hero. -->
+<main class="site" id="site"></main>
+
+<script type="module">
+import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.170.0/three.module.min.js';
+const BOOT = (window.__boot = { start: performance.now() });   // how long each stage of starting up takes
+
+// ---------------------------------------------------------------------------
+// A beech wood in October, seen lying on the ground: pale trunks converge on
+// the zenith through a wide lens, the crowns are painted as dabs of
+// yellow-green, amber and flame, and two dark spruces crowd the edge of the
+// frame. A click fires the viewer straight up the trunk line, through the
+// canopy, into open blue.
+// ---------------------------------------------------------------------------
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---- tunable parameters -------------------------------------------------------
+// The shipped look. Open the page with #dials in the address for a panel of
+// sliders over these; nothing here changes unless that panel is open.
+const DEFAULTS = {
+  // grain
+  grainOpacity: 0.3, grainFlicker: 0, grainSize: 1.5, grainContrast: 135, grainFps: 29, grainBlend: 'soft-light',
+  // faded print
+  saturate: 1.02, contrast: 0.98, sepia: 0.06, brightness: 0.98, wash: 0.3, leak: 0.4, vignette: 0.42,
+  // movement
+  wind: 1, windSpeed: 1, flight: (reduceMotion ? 4.6 : 6.4) / 1.2, spiral: 0.5, tighten: 22, drift: 1, clouds: 2,
+  // loose leaves
+  leafCount: 5, leafFall: 1, leafSway: 1.7, leafSize: 1,
+  // scroll
+  scrollVh: 100,
+};
+const P = { ...DEFAULTS };
+
+// deterministic rng so the wood is the same wood on every visit
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rnd = mulberry(20261012);
+const rr = (a, b) => a + rnd() * (b - a);
+const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+
+// ---- palette (sRGB, converted to linear by THREE.Color) --------------------
+const SKY_ZENITH = new THREE.Color('#1f6fd8');
+const SKY_HORIZON = new THREE.Color('#5aa0ee');
+// The wash colours are blended on screen, after tone mapping, so the sky can
+// actually arrive at the page's white. (Tone mapping holds a lit white down to a
+// light grey, which is what made the old hand-over to the white layer visible.)
+// convertLinearToSRGB leaves these holding plain screen values.
+const SKY_PALE = new THREE.Color('#8fbdeb').convertLinearToSRGB();  // the blue simply grows lighter first
+const SUN_GLOW = new THREE.Color('#f6eed8').convertLinearToSRGB();  // then the faintest warmth
+const SKY_WHITE = new THREE.Color('#fdfcf7').convertLinearToSRGB(); // and white
+const FOG = new THREE.Color('#3f8ce6');
+const SUN_DIR = new THREE.Vector3(-0.62, 0.66, -0.42).normalize();
+
+// leaf families: A and B are the two hues each dab blends between
+const FAMILIES = {
+  // each tree keeps to one colour, the way the reference has a pink tree, a white
+  // one, a lime one, a green one, an orange maple and a golden one
+  gold:  ['#e9ab1a', '#f0c63a'],   // golden yellow
+  amber: ['#b3cd2c', '#d3e058'],   // lime, backlit yellow-green
+  flame: ['#d94a14', '#bd2a12'],   // maple orange into red
+  ember: ['#e994a9', '#f1bac6'],   // blossom pink
+  olive: ['#5c9d31', '#8fc03c'],   // fresh green
+  lime:  ['#ece5d4', '#f5f0e4'],   // white
+  spruce: ['#4d8a38', '#6ea742'],
+};
+
+// ---- renderer / scene ------------------------------------------------------
+const canvas = document.getElementById('stage');
+// no antialiasing on the canvas itself: it only ever receives one full-screen picture
+// from the finishing pass. The forest is antialiased in its own buffer (see below).
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+// for testing only: ?pr=3 forces the canvas resolution, ?scale=0.7 the scene's share of it,
+// ?h=10 the starting height in percent, ?u=0.4 holds the flight at that point
+const QS = new URLSearchParams(location.search);
+const PR_FORCED = Number(QS.get('pr')) || 0;
+const CANVAS_PR = PR_FORCED || Math.min(window.devicePixelRatio || 1, 2);
+renderer.setPixelRatio(CANVAS_PR);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.98;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(FOG, 34, 150);
+
+const camera = new THREE.PerspectiveCamera(96, 1, 0.05, 600);
+const GROUND_Y = 10; // start about a quarter of the way up the trunks
+camera.position.set(0, GROUND_Y, 0); // moved to the 50% start once the tree height is known
+
+// light: a low warm sun off to the upper left, cool sky fill, warm bounce
+scene.add(new THREE.HemisphereLight(new THREE.Color('#b3d0ef'), new THREE.Color('#8a6a4a'), 1.6));
+const sun = new THREE.DirectionalLight(new THREE.Color('#ffe9c9'), 2.2);
+sun.position.copy(SUN_DIR).multiplyScalar(100);
+scene.add(sun);
+
+// ---- sky dome --------------------------------------------------------------
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(500, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      uZenith: { value: SKY_ZENITH },
+      uHorizon: { value: SKY_HORIZON },
+      uPale: { value: SKY_PALE },
+      uGlow: { value: SUN_GLOW },
+      uWhite: { value: SKY_WHITE },
+      uSun: { value: SUN_DIR },
+      uLift: { value: 0 },  // 0..1, how far the light has opened
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform vec3 uZenith, uHorizon, uPale, uGlow, uWhite, uSun; uniform float uLift;
+      varying vec3 vDir;
+      void main() {
+        float h = clamp(vDir.y, 0.0, 1.0);
+        vec3 col = mix(uHorizon, uZenith, pow(h, 0.65));
+        // the sun, up to the right: a wide warm haze and a tighter bright core
+        float d = max(dot(normalize(vDir), uSun), 0.0);
+        col += vec3(1.0, 0.93, 0.78) * (0.16 * pow(d, 14.0) + 0.45 * pow(d, 260.0)) * (1.0 - uLift);
+        // The whole sky brightens together, with no edge anywhere. It stays in its
+        // own hue as it lightens (blue to pale blue), and only near the end picks up
+        // a trace of warmth before settling on white, so it never passes through
+        // the grey-green that a straight blue-to-yellow blend makes.
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        vec3 o = gl_FragColor.rgb;
+        o = mix(o, uPale, smoothstep(0.0, 0.55, uLift));
+        o = mix(o, uGlow, smoothstep(0.35, 0.85, uLift));
+        o = mix(o, uWhite, smoothstep(0.7, 1.0, uLift));
+        gl_FragColor.rgb = o;
+      }`,
+  }),
+);
+sky.renderOrder = 1;
+scene.add(sky);
+
+// ---- bark texture: dark brown, mottled, a little lichen ---------------------
+function barkTexture() {
+  const W = 256, H = 1024;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#7d5d45';
+  ctx.fillRect(0, 0, W, H);
+  const r = mulberry(77);
+  const blot = (color, n, rx, ry, alpha) => {
+    ctx.fillStyle = color;
+    for (let i = 0; i < n; i++) {
+      ctx.globalAlpha = alpha * (0.5 + r());
+      ctx.beginPath();
+      ctx.ellipse(r() * W, r() * H, rx * (0.4 + r()), ry * (0.4 + r()), r() * 6.3, 0, 6.3);
+      ctx.fill();
+    }
+  };
+  blot('#9c7b5e', 200, 30, 48, 0.26);   // warmer patches
+  blot('#4a372a', 180, 24, 40, 0.2);    // deep shadows
+  blot('#5e5a3a', 70, 16, 22, 0.14);    // lichen
+  blot('#241a12', 220, 10, 2, 0.18);    // lenticel scratches, horizontal
+  blot('#3a2b1f', 40, 3, 90, 0.14);     // faint vertical seams
+  ctx.globalAlpha = 1;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+// ---- leaf dab atlas ----------------------------------------------------------
+// 2x2 atlas of painterly "dabs": each cell is 3-5 overlapping leaf shapes.
+// R channel = which of the two family hues this leaf takes, G = luminance
+// shading, A = coverage with a softened, slightly ragged edge.
+function dabAtlas() {
+  const S = 512, CELL = 256;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  const r = mulberry(4242);
+  const leaf = (cx, cy, ang, len, wid, hue, lum) => {
+    // pointed ellipse with a jittered outline
+    const pts = [];
+    const n = 22;
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const ex = Math.cos(a) * len;
+      const ey = Math.sin(a) * wid * (0.75 + 0.25 * Math.abs(Math.cos(a)));
+      const j = 1 + (r() - 0.5) * 0.16;
+      pts.push([
+        cx + (ex * Math.cos(ang) - ey * Math.sin(ang)) * j,
+        cy + (ex * Math.sin(ang) + ey * Math.cos(ang)) * j,
+      ]);
+    }
+    const g = ctx.createLinearGradient(
+      cx - Math.cos(ang) * len, cy - Math.sin(ang) * len,
+      cx + Math.cos(ang) * len, cy + Math.sin(ang) * len,
+    );
+    const hueByte = Math.round(hue * 255);
+    g.addColorStop(0, `rgb(${hueByte},${Math.round(lum * 0.72 * 255)},0)`);
+    g.addColorStop(1, `rgb(${hueByte},${Math.round(lum * 255)},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k = 1; k < n; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    ctx.closePath();
+    ctx.fill();
+    // shadowed rim so each leaf keeps its outline where dabs overlap
+    ctx.strokeStyle = `rgb(${hueByte},${Math.round(lum * 0.42 * 255)},0)`;
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  };
+  for (let cell = 0; cell < 4; cell++) {
+    const ox = (cell % 2) * CELL, oy = Math.floor(cell / 2) * CELL;
+    const count = 3 + Math.floor(r() * 3);
+    for (let i = 0; i < count; i++) {
+      leaf(
+        ox + CELL / 2 + (r() - 0.5) * 90,
+        oy + CELL / 2 + (r() - 0.5) * 90,
+        r() * Math.PI,
+        44 + r() * 30,
+        22 + r() * 14,
+        r(),
+        0.32 + r() * 0.68,
+      );
+    }
+  }
+  // soften edges a touch so the alpha cutout reads like a wet brush edge
+  const soft = document.createElement('canvas');
+  soft.width = S; soft.height = S;
+  const sctx = soft.getContext('2d');
+  sctx.filter = 'blur(1.2px)';
+  sctx.drawImage(c, 0, 0);
+  const tex = new THREE.CanvasTexture(soft);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+// ---- geometry builders ----------------------------------------------------
+// One merged buffer per tree for branches; one global buffer for twig lines;
+// one global instanced buffer for every leaf dab in the wood.
+class TubeBuilder {
+  constructor() { this.pos = []; this.nor = []; this.uv = []; this.idx = []; this.count = 0; }
+  // path: [{p: Vector3, r: number}], sides: ring resolution
+  addPath(path, sides) {
+    const base = this.count;
+    let N = new THREE.Vector3();
+    let arc = 0;
+    const T = new THREE.Vector3(), B = new THREE.Vector3(), tmp = new THREE.Vector3();
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i].p;
+      const next = path[Math.min(i + 1, path.length - 1)].p;
+      const prev = path[Math.max(i - 1, 0)].p;
+      T.subVectors(next, prev).normalize();
+      if (i === 0) {
+        tmp.set(1, 0, 0);
+        if (Math.abs(T.dot(tmp)) > 0.9) tmp.set(0, 0, 1);
+        N.crossVectors(T, tmp).normalize();
+      } else {
+        arc += p.distanceTo(prev);
+        // parallel-transport the frame so the tube doesn't twist
+        N.sub(tmp.copy(T).multiplyScalar(N.dot(T))).normalize();
+      }
+      B.crossVectors(T, N);
+      const rad = path[i].r;
+      for (let j = 0; j <= sides; j++) {
+        const a = (j / sides) * Math.PI * 2;
+        const nx = N.x * Math.cos(a) + B.x * Math.sin(a);
+        const ny = N.y * Math.cos(a) + B.y * Math.sin(a);
+        const nz = N.z * Math.cos(a) + B.z * Math.sin(a);
+        this.pos.push(p.x + nx * rad, p.y + ny * rad, p.z + nz * rad);
+        this.nor.push(nx, ny, nz);
+        this.uv.push(j / sides, arc / 2.4);
+      }
+    }
+    const ring = sides + 1;
+    for (let i = 0; i < path.length - 1; i++) {
+      for (let j = 0; j < sides; j++) {
+        const a = base + i * ring + j, b = a + 1, c = a + ring, d = c + 1;
+        this.idx.push(a, c, b, b, c, d);
+      }
+    }
+    this.count += path.length * ring;
+  }
+  build() {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
+    g.setIndex(this.idx);
+    return g;
+  }
+}
+
+const twigPos = [];
+const leaves = { pos: [], quat: [], scale: [], colA: [], colB: [], misc: [] };
+const tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion();
+const Z = new THREE.Vector3(0, 0, 1), Y = new THREE.Vector3(0, 1, 0);
+const familyColors = {};
+for (const [k, [a, b]] of Object.entries(FAMILIES)) familyColors[k] = [new THREE.Color(a), new THREE.Color(b)];
+
+function addDab(p, family, scale) {
+  // keep a window of sky open straight overhead. Most leaves inside that cone
+  // are "flight-only": scaled to nothing while the viewer lies on the ground,
+  // grown in once the camera lifts, so the ascent still pushes through foliage.
+  let flightOnly = 0;
+  const off = Math.hypot(p.x, p.z);
+  if (off < p.y * 0.2) {
+    // the original window. Its early return and its one random draw are kept
+    // exactly as they were, so the seeded wood grows identically.
+    if (p.y < 18) return;
+    if (p.y < 22 || rnd() < 0.75) flightOnly = 1;
+  } else {
+    // around that cone, a wider window in the rough shape of a heart (point toward
+    // the bottom of the screen, lobes toward the top): these dabs also wait for
+    // the flight. No random draw here, so nothing downstream shifts.
+    const u = -p.x / (p.y * 0.24), v = -p.z / (p.y * 0.24), q = u * u + v * v - 1;
+    if (q * q * q - u * u * v * v * v < 0) flightOnly = 1;
+  }
+  // face mostly downward/upward (seen from below), random tilt and spin
+  const tilt = rnd() < 0.65 ? rr(0, 0.7) : rr(0.7, 1.5);
+  const az = rr(0, Math.PI * 2);
+  const normal = new THREE.Vector3(Math.sin(tilt) * Math.cos(az), Math.cos(tilt), Math.sin(tilt) * Math.sin(az));
+  tmpQ.setFromUnitVectors(Z, normal);
+  tmpQ2.setFromAxisAngle(Z, rr(0, Math.PI * 2));
+  tmpQ.multiply(tmpQ2);
+  const [a, b] = familyColors[family];
+  const jitter = rr(0.82, 1.18);
+  leaves.pos.push(p.x, p.y, p.z);
+  leaves.quat.push(tmpQ.x, tmpQ.y, tmpQ.z, tmpQ.w);
+  leaves.scale.push(scale);
+  leaves.colA.push(a.r * jitter, a.g * jitter, a.b * jitter);
+  leaves.colB.push(b.r * jitter, b.g * jitter, b.b * jitter);
+  leaves.misc.push(rr(0, Math.PI * 2), Math.floor(rnd() * 4), flightOnly, rr(0.55, 1.15));
+}
+
+// perturb a direction by a random vector, keep unit length
+const _v = new THREE.Vector3();
+function wobble(dir, amount, upBias) {
+  _v.set(rr(-1, 1), rr(-1, 1), rr(-1, 1)).multiplyScalar(amount);
+  dir.add(_v).addScaledVector(Y, upBias).normalize();
+  return dir;
+}
+function perpendicular(dir) {
+  _v.set(rr(-1, 1), rr(-1, 1), rr(-1, 1));
+  return _v.sub(dir.clone().multiplyScalar(_v.dot(dir))).normalize().clone();
+}
+
+// A crown branch: curved tube, children at the tip and along the outer half,
+// leaf dabs along everything from lod.leafDepth outward.
+function growBranch(tb, start, dir, len, r0, r1, depth, lod, family) {
+  const segs = 4;
+  const path = [{ p: start.clone(), r: r0 }];
+  const d = dir.clone();
+  let p = start.clone();
+  for (let i = 1; i <= segs; i++) {
+    wobble(d, 0.16, 0.05);
+    p = p.clone().addScaledVector(d, len / segs);
+    path.push({ p, r: r0 + (r1 - r0) * (i / segs) });
+  }
+  if (depth < lod.maxDepth) tb.addPath(path, Math.max(3, 7 - depth * 2));
+  else for (let i = 0; i < segs; i++) twigPos.push(path[i].p.x, path[i].p.y, path[i].p.z, path[i + 1].p.x, path[i + 1].p.y, path[i + 1].p.z);
+
+  if (depth >= lod.leafDepth) {
+    const step = lod.leafStep;
+    for (let s = step * 0.5; s < len; s += step) {
+      const i = Math.min(segs - 1, Math.floor((s / len) * segs));
+      const t = (s / len) * segs - i;
+      const c = path[i].p.clone().lerp(path[i + 1].p, t);
+      const n = lod.dabsPerCluster;
+      for (let k = 0; k < n; k++) {
+        const q = c.clone().add(new THREE.Vector3(rr(-1, 1), rr(-0.6, 0.6), rr(-1, 1)).multiplyScalar(lod.spread));
+        addDab(q, family, rr(0.38, 0.72) * lod.dabScale);
+      }
+    }
+  }
+  if (depth >= lod.maxDepth) return;
+  const kids = 2 + (rnd() < 0.55 ? 1 : 0);
+  for (let k = 0; k < kids; k++) {
+    const at = k === 0 ? 1 : rr(0.55, 0.95);
+    const i = Math.min(segs - 1, Math.floor(at * segs));
+    const t = at * segs - i;
+    const origin = path[i].p.clone().lerp(path[i + 1].p, t);
+    const axis = perpendicular(d);
+    const cd = d.clone().applyAxisAngle(axis, k === 0 ? rr(0.15, 0.4) : rr(0.5, 0.95));
+    cd.addScaledVector(Y, 0.25).normalize();
+    const cr0 = r0 + (r1 - r0) * at;
+    growBranch(tb, origin, cd, len * rr(0.58, 0.74), cr0 * 0.9, cr0 * 0.42, depth + 1, lod, family);
+  }
+}
+
+function beech(tree) {
+  const tb = new TubeBuilder();
+  const { x, z, height: H, baseR, lean, family, lod } = tree;
+  // trunk: near-vertical with a gentle lean and slight waver
+  const path = [];
+  const d = new THREE.Vector3(lean.x, 1, lean.z).normalize();
+  let p = new THREE.Vector3(x, -0.5, z);
+  const segs = 14;
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    const r = baseR * Math.pow(1 - t, 0.85) + 0.03;
+    path.push({ p: p.clone(), r });
+    wobble(d, 0.05, 0.02);
+    p = p.clone().addScaledVector(d, H / segs);
+  }
+  tb.addPath(path, 10);
+  // crown: branches leave the trunk from ~45% up, rising and spreading
+  const crownStart = 0.42 + rnd() * 0.1;
+  const nBranches = lod.branches;
+  for (let i = 0; i < nBranches; i++) {
+    const t = crownStart + (1 - crownStart) * ((i + rnd() * 0.8) / nBranches);
+    const seg = Math.min(segs - 1, Math.floor(t * segs));
+    const origin = path[seg].p.clone().lerp(path[seg + 1].p, t * segs - seg);
+    const trunkDir = path[seg + 1].p.clone().sub(path[seg].p).normalize();
+    const axis = perpendicular(trunkDir);
+    // steeper branches near the top, spreading ones lower down
+    const ang = rr(0.55, 1.1) * (1 - (t - crownStart) * 0.5);
+    const bd = trunkDir.clone().applyAxisAngle(axis, ang);
+    bd.add(new THREE.Vector3(x, 0, z).normalize().multiplyScalar(0.45)).normalize(); // crowns open outward
+    const len = H * rr(0.2, 0.3) * (1 - (t - crownStart) * 0.35);
+    const r = path[seg].r;
+    growBranch(tb, origin, bd, len, r * 0.55, r * 0.22, 1, lod, family);
+  }
+  const g = tb.build();
+  return g;
+}
+
+// A spruce: straight trunk, whorls of drooping branches, dark dense dabs.
+function spruce(tree) {
+  const tb = new TubeBuilder();
+  const { x, z, height: H, baseR, lod } = tree;
+  const path = [];
+  for (let i = 0; i <= 10; i++) {
+    const t = i / 10;
+    path.push({ p: new THREE.Vector3(x + rr(-0.05, 0.05), -0.5 + H * t, z + rr(-0.05, 0.05)), r: baseR * (1 - t) + 0.03 });
+  }
+  tb.addPath(path, 8);
+  for (let y = H * 0.25; y < H * 0.97; y += 0.9) {
+    const n = 4 + Math.floor(rnd() * 3);
+    const reach = (1 - y / H) * H * 0.22 + 0.4;
+    for (let k = 0; k < n; k++) {
+      const a = rr(0, Math.PI * 2);
+      const dir = new THREE.Vector3(Math.cos(a), -0.28, Math.sin(a)).normalize();
+      const start = new THREE.Vector3(x, y, z);
+      const bp = [{ p: start, r: 0.06 }];
+      let q = start.clone();
+      for (let i = 1; i <= 3; i++) {
+        q = q.clone().addScaledVector(dir, reach / 3);
+        q.y -= 0.05 * i;
+        bp.push({ p: q.clone(), r: 0.06 * (1 - i / 3) + 0.01 });
+        for (let m = 0; m < lod.dabsPerCluster; m++) {
+          addDab(q.clone().add(new THREE.Vector3(rr(-1, 1), rr(-0.7, 0.3), rr(-1, 1)).multiplyScalar(0.45)), 'spruce', rr(0.4, 0.7) * lod.dabScale);
+        }
+      }
+      tb.addPath(bp, 4);
+    }
+  }
+  return tb.build();
+}
+
+// ---- the wood -------------------------------------------------------------
+const LOD = {
+  near: { maxDepth: 4, leafDepth: 2, leafStep: 0.4, dabsPerCluster: 4, spread: 0.6, dabScale: 0.9, branches: 11 },
+  mid:  { maxDepth: 3, leafDepth: 2, leafStep: 0.5, dabsPerCluster: 4, spread: 0.7, dabScale: 1.4, branches: 10 },
+  far:  { maxDepth: 3, leafDepth: 1, leafStep: 0.8, dabsPerCluster: 3, spread: 0.9, dabScale: 2.2, branches: 8 },
+};
+const barkMat = new THREE.MeshLambertMaterial({ map: barkTexture(), color: new THREE.Color('#fbeadb') });
+const trees = [];
+function ring(count, r0, r1, lod, families, hMin, hMax) {
+  for (let i = 0; i < count; i++) {
+    const a = ((i + rr(0.1, 0.9)) / count) * Math.PI * 2;
+    const r = rr(r0, r1);
+    const out = rr(0.06, 0.16) * (lod === LOD.near ? 1.3 : 1);
+    trees.push({
+      x: Math.cos(a) * r, z: Math.sin(a) * r,
+      height: rr(hMin, hMax), baseR: rr(0.18, 0.32),
+      lean: { x: Math.cos(a) * out + rr(-0.04, 0.04), z: Math.sin(a) * out + rr(-0.04, 0.04) },
+      family: pick(families), lod, kind: 'beech',
+    });
+  }
+}
+// the dominant near trunk that runs up the middle of the frame
+trees.push({ x: 0.9, z: 2.4, height: 34, baseR: 0.34, lean: { x: 0.06, z: 0.16 }, family: 'amber', lod: LOD.near, kind: 'beech' });
+ring(6, 2.8, 6.5, LOD.near, ['gold', 'amber', 'flame', 'olive', 'ember', 'lime'], 26, 36);
+ring(9, 7, 14, LOD.mid, ['amber', 'gold', 'flame', 'olive', 'ember', 'gold', 'lime'], 24, 34);
+ring(16, 15, 30, LOD.far, ['amber', 'flame', 'gold', 'olive', 'ember'], 22, 32);
+// one spruce at the frame's edge, like the photo's bottom-right corner
+trees.push({ x: 12.5, z: 11, height: 24, baseR: 0.26, lod: { dabsPerCluster: 3, dabScale: 0.9 }, kind: 'spruce' });
+
+const wood = new THREE.Group();
+for (const t of trees) {
+  const g = t.kind === 'spruce' ? spruce(t) : beech(t);
+  const m = new THREE.Mesh(g, barkMat);
+  m.frustumCulled = false;
+  wood.add(m);
+}
+scene.add(wood);
+
+// twigs: the finest reaching lines, dark against the sky
+const twigGeo = new THREE.BufferGeometry();
+twigGeo.setAttribute('position', new THREE.Float32BufferAttribute(twigPos, 3));
+const twigs = new THREE.LineSegments(twigGeo, new THREE.LineBasicMaterial({ color: new THREE.Color('#4a3424'), fog: true }));
+twigs.frustumCulled = false;
+scene.add(twigs);
+
+// Draw order: nearest first. The camera only ever looks straight up, so nearest
+// simply means lowest. Drawn in that order, a leaf already on screen lets the GPU
+// skip the ones hidden behind it, instead of painting every layer of the canopy.
+// The picture is identical; only the order of drawing changes.
+{
+  const n = leaves.scale.length;
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => leaves.pos[a * 3 + 1] - leaves.pos[b * 3 + 1]);
+  const take = (arr, k) => { const out = new Array(n * k); for (let i = 0; i < n; i++) for (let j = 0; j < k; j++) out[i * k + j] = arr[order[i] * k + j]; return out; };
+  leaves.pos = take(leaves.pos, 3); leaves.quat = take(leaves.quat, 4); leaves.scale = take(leaves.scale, 1);
+  leaves.colA = take(leaves.colA, 3); leaves.colB = take(leaves.colB, 3); leaves.misc = take(leaves.misc, 4);
+}
+// leaves: one instanced draw call for the whole canopy
+const plane = new THREE.PlaneGeometry(1, 1);
+const leafGeo = new THREE.InstancedBufferGeometry();
+leafGeo.index = plane.index;
+leafGeo.setAttribute('position', plane.attributes.position);
+leafGeo.setAttribute('uv', plane.attributes.uv);
+leafGeo.setAttribute('iPos', new THREE.InstancedBufferAttribute(new Float32Array(leaves.pos), 3));
+leafGeo.setAttribute('iQuat', new THREE.InstancedBufferAttribute(new Float32Array(leaves.quat), 4));
+leafGeo.setAttribute('iScale', new THREE.InstancedBufferAttribute(new Float32Array(leaves.scale), 1));
+leafGeo.setAttribute('iColA', new THREE.InstancedBufferAttribute(new Float32Array(leaves.colA), 3));
+leafGeo.setAttribute('iColB', new THREE.InstancedBufferAttribute(new Float32Array(leaves.colB), 3));
+leafGeo.setAttribute('iMisc', new THREE.InstancedBufferAttribute(new Float32Array(leaves.misc), 4));
+leafGeo.instanceCount = leaves.scale.length;
+console.info('beech ascent: leaf dabs', leaves.scale.length, 'twig segments', twigPos.length / 6);
+
+const leafMat = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: {
+    uMap: { value: dabAtlas() },
+    uTime: { value: 0 },
+    uWind: { value: reduceMotion ? 0 : 1 },
+    uFogColor: { value: FOG },
+    uFogRange: { value: new THREE.Vector2(34, 150) },
+    uSun: { value: SUN_DIR },
+  },
+  vertexShader: `
+    attribute vec3 iPos; attribute vec4 iQuat; attribute float iScale;
+    attribute vec3 iColA; attribute vec3 iColB; attribute vec4 iMisc;
+    uniform float uTime, uWind; uniform vec2 uFogRange; uniform vec3 uSun;
+    varying vec2 vUv; varying vec3 vColA, vColB; varying float vFog, vNear, vShade;
+    vec3 qrot(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+    void main() {
+      float phase = iMisc.x;
+      vUv = (uv + vec2(mod(iMisc.y, 2.0), floor(iMisc.y / 2.0))) * 0.5;
+      // flutter: each dab rocks on its stem
+      float f = (sin(uTime * 0.9 + phase) * 0.22 + sin(uTime * 0.33 + phase * 1.7) * 0.14) * uWind;
+      float show = iMisc.z > 0.5 ? smoothstep(26.0, 34.0, cameraPosition.y) : 1.0;
+      vec3 p = position * iScale * show;
+      float c = cos(f), s = sin(f);
+      p = vec3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+      vec3 world = iPos + qrot(iQuat, p);
+      // the whole crown breathes in the wind, more so higher up
+      float sway = 0.08 + 0.16 * clamp(world.y / 30.0, 0.0, 1.0);
+      float gust = 0.7 + 0.3 * sin(uTime * 0.21 + world.x * 0.05);
+      world.xz += vec2(sin(uTime * 0.45 + phase), cos(uTime * 0.34 + phase * 0.7)) * sway * gust * uWind;
+      float dist = length(world - cameraPosition);
+      vFog = smoothstep(uFogRange.x, uFogRange.y, dist);
+      vNear = smoothstep(0.12, 0.8, dist);
+      // backlight: thin leaves against the sun glow, brighter toward the top
+      vec3 n = normalize(qrot(iQuat, vec3(0.0, 0.0, 1.0)));
+      float back = abs(dot(n, uSun));
+      float toSun = 0.5 + 0.5 * dot(normalize(world - cameraPosition), uSun);   // the side of the sky the sun is on
+      vShade = (0.42 + 0.4 * clamp(world.y / 34.0, 0.0, 1.0) + 0.25 * back + 0.15 * toSun) * iMisc.w;
+      vColA = iColA; vColB = iColB;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+    }`,
+  fragmentShader: `
+    uniform sampler2D uMap; uniform vec3 uFogColor;
+    varying vec2 vUv; varying vec3 vColA, vColB; varying float vFog, vNear, vShade;
+    void main() {
+      vec4 t = texture2D(uMap, vUv);
+      float a = t.a * vNear;
+      if (a < mix(0.42, 0.18, vFog)) discard;
+      vec3 col = mix(vColA, vColB, t.r) * (0.2 + 1.0 * t.g) * vShade;
+      col = mix(col, uFogColor, vFog * 0.85);
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
+const canopy = new THREE.Mesh(leafGeo, leafMat);
+canopy.frustumCulled = false;
+scene.add(canopy);
+
+// ---- clouds: three loose drifts of cotton fluff the flight passes through --
+function puffTexture() {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const r = mulberry(5);
+  // several soft blobs offset from centre, so a puff is lumpy rather than round
+  for (let i = 0; i < 7; i++) {
+    const cx = S / 2 + (r() - 0.5) * S * 0.36;
+    const cy = S / 2 + (r() - 0.5) * S * 0.36;
+    const rad = S * (0.18 + r() * 0.22);
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+    g.addColorStop(0, 'rgba(255,255,255,0.32)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.12)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const puffTex = puffTexture();
+const clouds = new THREE.Group();
+scene.add(clouds);
+const puffs = [];
+// [height, x, z, scale]: spread across the sky above the treetops, visible
+// through the canopy from the ground. One sits right over the flight line and
+// is climbed straight through; the other two are skimmed at their edges.
+[[44, 0, -2, 1.2], [58, -17, 13, 1.6], [72, 19, -15, 1.8]].forEach(([y, cx, cz, sc]) => {
+  for (let i = 0; i < 60; i++) {
+    const a = rr(0, Math.PI * 2);
+    const rad = Math.pow(rnd(), 0.55) * 13 * sc;
+    const size = (5 + rnd() * 9) * sc;
+    const base = 0.12 + rnd() * 0.18;
+    const mat = new THREE.SpriteMaterial({
+      map: puffTex, transparent: true, depthWrite: false, fog: false,
+      opacity: base, color: new THREE.Color('#fdf8f0'), rotation: rr(0, 6.3),
+    });
+    const sp = new THREE.Sprite(mat);
+    sp.position.set(cx + Math.cos(a) * rad, y + (rnd() - 0.5) * 7, cz + Math.sin(a) * rad);
+    sp.scale.set(size, size, 1);
+    clouds.add(sp);
+    puffs.push({ sp, base });
+  }
+});
+
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// ---- camera + flight -------------------------------------------------------
+const flash = document.getElementById('flash');
+const vignette = document.querySelector('.vignette');
+const msg = document.getElementById('msg');
+let skyStart = null; // moment the camera clears the treetops
+// the highest leaf in the wood: once the upward-looking camera is above it, no leaf is in view
+let LEAF_TOP = 0;
+for (let i = 1; i < leaves.pos.length; i += 3) LEAF_TOP = Math.max(LEAF_TOP, leaves.pos[i]);
+LEAF_TOP += 1;
+// The blue-to-white wash is scrubbed by scrolling, not by time: once the flight
+// has landed in the blue, the first screen-height of scroll carries the sky to
+// the white that the rest of the site sits on. Scrolling back up returns the blue.
+const scrollcue = document.getElementById('scrollcue');
+const menu = document.getElementById('menu');
+let landed = false;
+history.scrollRestoration = 'manual';
+scrollTo(0, 0);
+document.documentElement.classList.add('locked');
+const smoother = (x) => { const k = Math.min(1, Math.max(0, x)); return k * k * k * (k * (k * 6 - 15) + 10); };
+// The sky no longer washes to white: the page below is laid straight on the blue.
+// (The wash machinery is kept, held at zero, in case it is wanted back.)
+const washProgress = () => 0;
+function say(html) {
+  if (!html) { msg.classList.remove('show'); return; }
+  msg.innerHTML = html;
+  msg.classList.add('show');
+}
+// white over blue sky, darkening to black as the sky washes out
+// white over the blue sky, settling into a deeper shade of that same blue on the wash
+const DEEP_SKY = [2, 56, 122]; // #02387A, the sky's #0466C8 taken darker
+function inkFor(white) {
+  const ch = (i) => Math.round(255 + (DEEP_SKY[i] - 255) * white);
+  document.documentElement.style.setProperty('--ui', `rgba(${ch(0)}, ${ch(1)}, ${ch(2)}, ${(0.75 + 0.2 * white).toFixed(2)})`);
+}
+
+// camera height slider: 0% is where the scene starts, 100% is the top of the
+// trees. Snapped stops, eased between while the viewer is at rest.
+// The scene opens at 50%; once touched, the slider snaps to steps of 25.
+const zoomBox = document.getElementById('zoom');
+const zoomRange = document.getElementById('zoomRange');
+let heightPct = QS.has('h') ? Number(QS.get('h')) / 100 : 0.5;
+const heightFor = (pct) => GROUND_Y + pct * (LEAF_TOP - 1 - GROUND_Y);
+camera.position.y = heightFor(heightPct);
+zoomRange.addEventListener('input', () => {
+  const snapped = Math.round(Number(zoomRange.value) / 25) * 25;
+  zoomRange.value = snapped;
+  heightPct = snapped / 100;
+  zoomRange.setAttribute('aria-valuetext', `${Math.round(heightPct * 100)}%`);
+});
+const replay = document.getElementById('replay');
+// controls must not start a flight
+const soundBtn = document.getElementById('sound');
+for (const el of [document.getElementById('zoom'), replay, soundBtn, menu]) {
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('keydown', (e) => e.stopPropagation());
+}
+replay.addEventListener('click', () => land());
+const lookNow = { x: 0, y: 0 };  // tiny idle drift of the gaze; no pointer parallax
+let flight = null;               // { start: seconds }
+const SKY_AT = 31; // ~90% of tree height: the second line of text appears here
+const RISE = 150;
+
+// slow lift off the ground, then the shot up through the crown
+const ease = (t) => Math.pow(t, 2.4);
+
+const AUTO_DELAY = 0; // the flight begins by itself as soon as the page is up (and straight after replay)
+let autoAt = AUTO_DELAY;
+function launch() {
+  if (flight) return;
+  autoAt = null;
+  flight = { elapsed: 0, from: camera.position.y };
+  zoomBox.classList.add('off');
+  say(null);
+}
+function land() {
+  flight = null;
+  autoAt = clock.getElapsedTime() + AUTO_DELAY; // replay: rest again, then fly again
+  skyStart = null;
+  landed = false;
+  scrollTo(0, 0);
+  document.documentElement.classList.add('locked');
+  scrollcue.classList.remove('show');
+  replay.classList.remove('show');
+  menu.classList.remove('show');
+  looseLeaves.length = 0; // the opening never has loose leaves
+  settled.length = 0;
+  burstLeaves.length = 0;
+  tramp.shots.length = 0;
+  tramp.stuck = null;
+  jump.state = 'idle';
+  jump.burst = false;
+  if (pileCanvas) pileCanvas.style.transform = '';
+  leavesMade = 0;
+  heroDue = false;
+  inkFor(0);
+  say(null);
+  for (const { sp, base } of puffs) { sp.material.opacity = base; sp.visible = true; }
+  camera.position.set(0, heightFor(heightPct), 0);
+  zoomBox.classList.remove('off');
+  camera.fov = 96;
+  camera.updateProjectionMatrix();
+  sky.material.uniforms.uLift.value = 0;
+  requestAnimationFrame(() => {
+    flash.classList.remove('on');
+    flash.style.opacity = '';
+    vignette.classList.remove('lift');
+  });
+}
+
+// ---- music ------------------------------------------------------------------
+// The soundtrack is a YouTube video, played through YouTube's own embedded
+// player (nothing is downloaded or re-hosted). It tries to start with sound the
+// moment the page loads. Most browsers refuse sound before the visitor has
+// touched the page; when that happens the video keeps playing silently, the
+// button shows "off", and the first click, tap or key press anywhere brings the
+// sound in. Either way it fades in slowly and loops through every flight.
+// If the player cannot load (for example inside a sandbox that blocks YouTube),
+// the quiet generated piece below plays instead.
+// The button (or M) turns sound off and on; the choice is remembered.
+const MUSIC_VIDEO = 'UZ9uyQI3pF0';
+const MUSIC_VOLUME = 55;   // 0..100, where the fade ends
+const MUSIC_FADE_S = 12;   // seconds the fade-in takes
+let wantSound = true;      // the visitor's choice
+try { wantSound = localStorage.getItem('fall-sound') !== 'off'; } catch (e) {}
+const AC = window.AudioContext || window.webkitAudioContext;
+const music = { ctx: null, master: null, audible: false, useGenerated: false, fade: 0 };
+let yt = null, ytReady = false, ytFailed = false;
+
+function showSound() {
+  const on = wantSound && music.audible;
+  soundBtn.classList.toggle('off', !on);
+  soundBtn.setAttribute('aria-pressed', String(on));
+  soundBtn.setAttribute('aria-label', on ? 'Turn sound off' : 'Turn sound on');
+}
+
+(function prepareYouTube() {
+  const holder = document.createElement('div');
+  holder.id = 'yt';
+  // kept out of sight: the page is about the wood, the video is only its sound
+  holder.style.cssText = 'position:fixed;left:-400px;bottom:0;width:320px;height:180px;opacity:0;pointer-events:none;';
+  holder.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(holder);
+  const inner = document.createElement('div');
+  inner.id = 'yt-player';
+  holder.appendChild(inner);
+  window.onYouTubeIframeAPIReady = () => {
+    yt = new YT.Player('yt-player', {
+      width: 320, height: 180, videoId: MUSIC_VIDEO,
+      host: 'https://www.youtube-nocookie.com',
+      playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, loop: 1, playlist: MUSIC_VIDEO, playsinline: 1, rel: 0 },
+      events: {
+        onReady: () => { ytReady = true; if (wantSound) soundOn(); },
+        onError: () => { ytFailed = true; fallBack(); },
+        onStateChange: (e) => {
+          // belt and braces for the loop: start over if it ever ends
+          if (e.data === YT.PlayerState.ENDED) { yt.seekTo(0); yt.playVideo(); }
+          if (e.data === YT.PlayerState.PLAYING && wantSound && !yt.isMuted() && !music.audible) heard();
+        },
+      },
+    });
+  };
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  tag.onerror = () => { ytFailed = true; fallBack(); };
+  document.head.appendChild(tag);
+  // if nothing answers in a few seconds, stop waiting and use the generated piece
+  setTimeout(() => { if (!ytReady && !ytFailed) { ytFailed = true; fallBack(); } }, 6000);
+})();
+
+// for checking from the console: __music() reports what the soundtrack is doing
+window.__music = () => ({ ytReady, ytFailed, wantSound, audible: music.audible, usingGenerated: music.useGenerated,
+  state: ytReady ? yt.getPlayerState() : null, volume: ytReady ? yt.getVolume() : null, muted: ytReady ? yt.isMuted() : null });
+
+// the sound is really coming out: fade it in, eased so it creeps in at first
+function heard() {
+  music.audible = true;
+  showSound();
+  const t0 = performance.now();
+  const secs = music.fadedOnce ? 1.5 : MUSIC_FADE_S; // the long fade is for the opening only
+  music.fadedOnce = true;
+  clearInterval(music.fade);
+  music.fade = setInterval(() => {
+    const k = Math.min(1, (performance.now() - t0) / (secs * 1000));
+    if (wantSound) yt.setVolume(Math.round(MUSIC_VOLUME * k * k));
+    if (k >= 1) clearInterval(music.fade);
+  }, 120);
+}
+// ask for sound. Called at load, and again from the first gesture if the
+// browser turned the load-time attempt down.
+function soundOn() {
+  if (!wantSound || music.audible) return;
+  if (music.useGenerated) {
+    if (!music.ctx && AC) music.ctx = new AC();
+    if (!music.ctx) return;
+    if (!music.master) generated(music.ctx);
+    music.ctx.resume().then(() => {
+      if (music.ctx.state !== 'running' || music.audible) return;
+      music.audible = true;
+      showSound();
+      music.master.gain.setTargetAtTime(wantSound ? 0.5 : 0, music.ctx.currentTime, 4); // slow fade-in here too
+    }).catch(() => {});
+    return;
+  }
+  if (!ytReady) return;
+  const attempt = (music.attempt = (music.attempt || 0) + 1);
+  const rolling = yt.getPlayerState() === YT.PlayerState.PLAYING; // already playing silently
+  yt.unMute();
+  yt.setVolume(0);
+  yt.playVideo();
+  if (rolling) heard();
+  // turned down by the browser: keep the video rolling silently so the sound
+  // can come in without a pause on the first gesture
+  setTimeout(() => {
+    if (music.attempt !== attempt || !wantSound) return;
+    if (yt.getPlayerState() === YT.PlayerState.PLAYING && !yt.isMuted()) return;
+    clearInterval(music.fade);
+    music.audible = false;
+    music.fadedOnce = false;
+    showSound();
+    yt.mute();
+    yt.playVideo();
+  }, 1500);
+}
+function fallBack() {
+  if (music.useGenerated) return;
+  music.useGenerated = true;
+  if (wantSound) soundOn();
+}
+function setSound(on) {
+  wantSound = on;
+  try { localStorage.setItem('fall-sound', on ? 'on' : 'off'); } catch (e) {}
+  if (on) { soundOn(); showSound(); return; }
+  clearInterval(music.fade);
+  music.audible = false;
+  if (ytReady && !music.useGenerated) { yt.mute(); yt.pauseVideo(); }
+  if (music.master) music.master.gain.setTargetAtTime(0, music.ctx.currentTime, 0.2);
+  showSound();
+}
+const toggleSound = () => setSound(!(wantSound && music.audible));
+soundBtn.addEventListener('click', toggleSound);
+// clicks and keys do not start the flight; they only let the sound in when the
+// browser refused it at load
+// every event a browser may count as the visitor's first gesture (iOS Safari
+// only honours the release of a tap, not the press)
+for (const ty of ['pointerdown', 'pointerup', 'touchend', 'click']) addEventListener(ty, () => soundOn());
+addEventListener('keydown', (e) => {
+  if (e.key === 'm' || e.key === 'M') toggleSound(); else soundOn();
+});
+showSound();
+
+function generated(ctx) {
+  const master = ctx.createGain();
+  master.gain.value = 0; // soundOn() fades it in once the context is allowed to run
+  const comp = ctx.createDynamicsCompressor();
+  master.connect(comp).connect(ctx.destination);
+  music.master = master;
+  // long soft echo
+  const delay = ctx.createDelay(1.5); delay.delayTime.value = 0.46;
+  const fb = ctx.createGain(); fb.gain.value = 0.42;
+  const damp = ctx.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1800;
+  delay.connect(damp).connect(fb).connect(delay);
+  delay.connect(master);
+  const hz = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
+  // Dm, Bb, F, C: one chord every 10 seconds, voiced low
+  const CHORDS = [[50, 57, 65, 69], [46, 53, 62, 65], [53, 60, 65, 69], [48, 55, 64, 67]];
+  const SCALE = [62, 65, 67, 69, 72, 74, 77, 79]; // D minor pentatonic
+  function pad(notes, at, len) {
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 650;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(0.11, at + 3.5);
+    g.gain.setValueAtTime(0.11, at + len - 1);
+    g.gain.linearRampToValueAtTime(0, at + len + 4);
+    f.connect(g).connect(master);
+    for (const n of notes) for (const det of [-5, 5]) {
+      const o = ctx.createOscillator();
+      o.type = det < 0 ? 'triangle' : 'sine';
+      o.frequency.value = hz(n);
+      o.detune.value = det;
+      o.connect(f);
+      o.start(at);
+      o.stop(at + len + 4.2);
+    }
+  }
+  function pluck(n, at, vel) {
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz(n);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass';
+    f.frequency.setValueAtTime(2600, at);
+    f.frequency.exponentialRampToValueAtTime(500, at + 1.6);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(vel, at + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 2.4);
+    o.connect(f).connect(g);
+    g.connect(master);
+    g.connect(delay);
+    o.start(at);
+    o.stop(at + 2.5);
+  }
+  // look-ahead scheduler, so timing survives a throttled background tab
+  let nextChord = ctx.currentTime + 0.1, chordI = 0, nextPluck = ctx.currentTime + 2, last = 3;
+  setInterval(() => {
+    const horizon = ctx.currentTime + 2.5;
+    while (nextChord < horizon) { pad(CHORDS[chordI++ % CHORDS.length], nextChord, 10); nextChord += 10; }
+    while (nextPluck < horizon) {
+      // wander stepwise through the scale, like leaves coming down one at a time
+      last = Math.max(0, Math.min(SCALE.length - 1, last + Math.floor(Math.random() * 5) - 2));
+      pluck(SCALE[last], nextPluck, 0.1 + Math.random() * 0.08);
+      if (Math.random() < 0.25) pluck(SCALE[last] - 12, nextPluck + 0.02, 0.07);
+      nextPluck += [0.75, 1.5, 1.5, 2.25, 3][Math.floor(Math.random() * 5)];
+    }
+  }, 500);
+}
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  // keep the wide-lens feel on portrait screens
+  camera.fov = w > h ? 96 : 108;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---- loose leaves ---------------------------------------------------------------
+// Painted once as a few sprites, then flown in screen space on an overlay canvas.
+// Each leaf gets a push in some direction, the push gives out, and it sinks
+// slowly in a soft zigzag until it drifts off the bottom, or, once the page has
+// been scrolled to its end, lands in the footer. The first one always
+// runs from the middle of the bottom edge toward the middle of the right edge;
+// the rest start in random places with their own variations of the same motion.
+const leafCanvas = document.getElementById('leaf');
+const lctx = leafCanvas.getContext('2d');
+function sizeLeaves() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  leafCanvas.width = Math.ceil(innerWidth * dpr);
+  leafCanvas.height = Math.ceil(innerHeight * dpr);
+  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', sizeLeaves);
+sizeLeaves();
+function leafSprite(stops) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  c.translate(64, 64);
+  const body = () => {
+    c.beginPath();
+    c.moveTo(0, -56);                                  // pointed tip
+    c.bezierCurveTo(30, -34, 38, 6, 16, 40);
+    c.quadraticCurveTo(8, 50, 0, 50);                  // rounded base
+    c.quadraticCurveTo(-8, 50, -16, 40);
+    c.bezierCurveTo(-38, 6, -30, -34, 0, -56);
+    c.closePath();
+  };
+  const g = c.createLinearGradient(-30, -50, 30, 50);
+  stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col));
+  body(); c.fillStyle = g; c.fill();
+  c.save(); body(); c.clip();
+  c.strokeStyle = 'rgba(110, 50, 0, 0.4)'; c.lineWidth = 1.4; c.lineCap = 'round';
+  for (let i = 0; i < 7; i++) {                        // side veins off the midrib
+    const y = -40 + i * 12;
+    for (const sx of [-1, 1]) { c.beginPath(); c.moveTo(0, y + 6); c.quadraticCurveTo(sx * 14, y, sx * 34, y - 10); c.stroke(); }
+  }
+  c.restore();
+  c.strokeStyle = 'rgba(100, 45, 0, 0.65)'; c.lineWidth = 2.2;
+  c.beginPath(); c.moveTo(0, -54); c.lineTo(0, 62); c.stroke(); // midrib and stalk
+  body(); c.strokeStyle = 'rgba(130, 60, 0, 0.5)'; c.lineWidth = 1.6; c.stroke();
+  // a very soft U across the blade: a shallow shaded trough along the spine,
+  // easing up to lighter, lifted edges
+  c.save(); body(); c.clip();
+  const u = c.createLinearGradient(-38, 0, 38, 0);
+  u.addColorStop(0, 'rgba(255, 245, 210, 0.2)');
+  u.addColorStop(0.3, 'rgba(255, 245, 210, 0)');
+  u.addColorStop(0.5, 'rgba(70, 30, 0, 0.2)');
+  u.addColorStop(0.7, 'rgba(255, 245, 210, 0)');
+  u.addColorStop(1, 'rgba(255, 245, 210, 0.2)');
+  c.fillStyle = u; c.fillRect(-64, -64, 128, 128);
+  c.restore();
+  // shaded twin, blended over whichever half is turned away from the light
+  const dk = document.createElement('canvas');
+  dk.width = dk.height = 128;
+  const d = dk.getContext('2d');
+  d.drawImage(cv, 0, 0);
+  d.globalCompositeOperation = 'source-atop';
+  d.fillStyle = 'rgba(60, 25, 0, 0.55)';
+  d.fillRect(0, 0, 128, 128);
+  return { base: cv, dark: dk };
+}
+// Every leaf is painted for itself: two or three stops picked from anywhere
+// between the four swatches (a touch muted to sit with the faded print), each
+// nudged lighter or darker, so no two leaves share a colour.
+const SWATCHES = [[233, 148, 169], [200, 221, 60], [104, 172, 58], [242, 185, 41], [233, 87, 28], [213, 51, 26]]; // blossom pink, lime, green, gold, maple orange, red: what falls from these trees
+function randomLeafColour() {
+  const at = Math.random() * (SWATCHES.length - 1);
+  const i = Math.floor(at), k = at - i;
+  const shade = 0.82 + Math.random() * 0.3;
+  const ch = (n) => Math.max(0, Math.min(255, Math.round((SWATCHES[i][n] + (SWATCHES[i + 1][n] - SWATCHES[i][n]) * k) * shade)));
+  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`;
+}
+const randomLeafSprite = () => leafSprite(Array.from({ length: 2 + Math.floor(Math.random() * 2) }, randomLeafColour));
+const looseLeaves = [];
+let lastT = 0, nextLeafAt = 0, heroDue = false, leavesMade = 0;
+function spawnLeaf(t, hero, fromTop) {
+  const W = innerWidth, H = innerHeight;
+  let from, aim;
+  if (fromTop) {
+    // later leaves simply come down from above the frame, already sinking
+    from = { x: W * (0.04 + Math.random() * 0.92), y: -60 };
+    aim = { x: from.x, y: from.y + 1 };
+  } else if (hero) {
+    from = { x: W / 2, y: H + 40 };
+    aim = { x: W + 40, y: H / 2 };
+  } else {
+    // start somewhere along the bottom or the two sides, aimed at a random spot inside
+    const edge = Math.random();
+    if (edge < 0.45) from = { x: Math.random() * W, y: H + 40 };
+    else if (edge < 0.725) from = { x: -40, y: H * (0.25 + Math.random() * 0.7) };
+    else from = { x: W + 40, y: H * (0.25 + Math.random() * 0.7) };
+    aim = { x: W * (0.12 + Math.random() * 0.76), y: H * (0.08 + Math.random() * 0.5) };
+  }
+  const T = hero ? 3.4 + Math.random() * 1.6 : 2.8 + Math.random() * 4.2; // seconds a full crossing would take
+  const total = Math.hypot(aim.x - from.x, aim.y - from.y);
+  looseLeaves.push({
+    x: from.x, y: from.y, from, total,
+    push: fromTop ? { x: 0, y: 0 } : { x: (aim.x - from.x) / T, y: (aim.y - from.y) / T },
+    vx: fromTop ? 0 : (aim.x - from.x) / T, vy: fromTop ? 12 : (aim.y - from.y) / T,
+    giveOut: hero ? 0.4 : 0.2 + Math.random() * 0.55,      // fraction of the way before the push dies
+    fallAt: fromTop ? t : null,
+    depth: Math.random(),                                  // where on the pile's face (or how far back on the ground) it comes to rest
+    // everything below is rolled per leaf, the first one included
+    curl: (Math.random() - 0.5) * 70,                      // the push bends into an arc, px/s sideways
+    swayHz: 1.2 + Math.random() * 1.8,
+    swayAmp: 50 + Math.random() * 140,
+    sway2: 0.15 + Math.random() * 0.5, sway2Hz: 0.35 + Math.random() * 0.5, // a second, slower wander
+    sink: 16 + Math.random() * 30,                         // slow terminal fall, px per second
+    settle: 0.03 + Math.random() * 0.05,                   // how quickly it gives in to the fall
+    size: 22 + Math.random() * 66,
+    sprite: randomLeafSprite(),
+    spin: Math.random() * 6.3,
+    tilt: Math.random() * Math.PI * 2,                                   // every leaf faces its own way
+    drift: (Math.random() < 0.5 ? -1 : 1) * (0.08 + Math.random() * 0.22), // a slow turn, never a spin
+    rock: 0.12 + Math.random() * 0.14, rockHz: 1.6 + Math.random() * 1.2, // how it rocks as it sways
+    turn: 0.18 + Math.random() * 0.2, turnHz: 0.5 + Math.random() * 0.6,  // a slight, slow roll about the spine
+    fold: 0.2 + Math.random() * 0.16,                                     // how cupped the blade is: a soft U
+    born: t,
+  });
+}
+// ---- the pile in the footer --------------------------------------------------
+// A raked-up mound of leaves, painted once onto a canvas inside the footer. The
+// same height curve tells the falling leaves where the pile's surface is, so
+// some come to rest on it and the others on the ground beside it.
+const foot = document.getElementById('foot');
+const pileCanvas = document.getElementById('pile');
+const GROUND_PAD = 34; // the ground line, px above the bottom of the footer
+function pileShape(W) { const s = Math.max(70, Math.min(95, W * 0.07)); return { cx: W * 0.62, s, H: s * 0.72 }; }
+function pileH(x, W) {
+  const p = pileShape(W), u = (x - p.cx) / p.s;
+  if (Math.abs(u) >= 1.6) return 0;
+  const hill = Math.pow(Math.cos((u / 1.6) * Math.PI / 2), 1.5); // a rounded mound, not a cone
+  return p.H * hill * (1 + 0.06 * Math.sin(u * 7) + 0.04 * Math.sin(u * 13 + 1)); // a little lumpy
+}
+const pileSprites = Array.from({ length: 26 }, randomLeafSprite);
+// lying flat: the blade is squashed toward the ground before it is turned
+function layLeaf(c, sprite, x, y, size, roll, squash, shade, alpha) {
+  c.save();
+  c.translate(x, y);
+  c.scale(1, squash);
+  c.rotate(roll);
+  c.globalAlpha = 0.3 * alpha;                             // a little shadow under it
+  c.drawImage(sprite.dark, -size / 2 + 1, -size / 2 + 3 / squash, size, size);
+  c.globalAlpha = alpha;
+  c.drawImage(sprite.base, -size / 2, -size / 2, size, size);
+  if (shade > 0.01) { c.globalAlpha = shade * alpha; c.drawImage(sprite.dark, -size / 2, -size / 2, size, size); }
+  c.restore();
+}
+function paintPile() {
+  if (!foot) return;
+  const W = foot.clientWidth, Hh = foot.clientHeight;
+  if (!W || !Hh) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  pileCanvas.width = Math.ceil(W * dpr);
+  pileCanvas.height = Math.ceil(Hh * dpr);
+  const c = pileCanvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, Hh);
+  const ground = Hh - GROUND_PAD, p = pileShape(W);
+  // its own small seeded generator, so the pile is the same pile after a resize
+  let seed = 90210;
+  const r = () => { seed = (seed + 0x6D2B79F5) | 0; let k = Math.imul(seed ^ (seed >>> 15), 1 | seed); k = (k + Math.imul(k ^ (k >>> 7), 61 | k)) ^ k; return ((k ^ (k >>> 14)) >>> 0) / 4294967296; };
+  const scale = W < 600 ? 0.8 : 1;
+  // soft shadow on the ground under the mound
+  c.save();
+  c.translate(p.cx, ground + 2); c.scale(1, 0.1);
+  const sh = c.createRadialGradient(0, 0, p.s * 0.4, 0, 0, p.s * 2);
+  sh.addColorStop(0, 'rgba(70, 35, 0, 0.26)'); sh.addColorStop(1, 'rgba(70, 35, 0, 0)');
+  c.fillStyle = sh; c.beginPath(); c.arc(0, 0, p.s * 2, 0, Math.PI * 2); c.fill();
+  c.restore();
+  // a small leaf-coloured heart well inside the mound, only so no paper can show
+  // through; the leaves below bury it completely
+  c.beginPath(); c.moveTo(p.cx - p.s * 1.05, ground);
+  for (let x = p.cx - p.s * 1.05; x <= p.cx + p.s * 1.05; x += 4) c.lineTo(x, ground - Math.max(0, pileH(x, W) * 0.78 - 16));
+  c.lineTo(p.cx + p.s * 1.05, ground); c.closePath();
+  c.fillStyle = 'rgb(168, 112, 28)'; c.fill();
+  // loose ones on the ground: thick near the pile, thinning out to the edges
+  for (let i = 0; i < 70; i++) {
+    const near = i < 52;
+    const x = near ? p.cx + (r() + r() + r() - 1.5) * p.s * 3.2 : 70 + r() * (W - 70);   // clear of the X link
+    layLeaf(c, pileSprites[Math.floor(r() * pileSprites.length)], x, ground - r() * 12, (24 + r() * 30) * scale, r() * 6.3, 0.22 + r() * 0.3, 0.1 + r() * 0.2, 1);
+  }
+  // the mound itself, back to front: the first ones down sit deepest in shade
+  const N = Math.round((p.s * p.H) / 22);
+  for (let i = 0; i < N; i++) {
+    const x = p.cx + (r() < 0.5 ? r() * 2 - 1 : (r() + r() - 1)) * p.s * 1.58; // even cover, a little thicker in the middle
+    const h = pileH(x, W);
+    const k = i / N;
+    // early layers fill the body, the last ones favour the surface so the outline reads leafy
+    const v = k < 0.7 ? r() : 0.75 + r() * 0.3;
+    layLeaf(c, pileSprites[Math.floor(r() * pileSprites.length)], x, ground - v * h - 4, (16 + r() * 20) * scale, r() * 6.3, 0.4 + r() * 0.55, 0.5 * Math.pow(1 - k, 1.4) + (1 - v) * 0.12, 1);
+  }
+}
+addEventListener('resize', paintPile);
+paintPile();
+
+// ---- the jump ---------------------------------------------------------------------
+// When the pile scrolls into view a small figure runs in from the left edge,
+// leaps, and lands in the leaves. Some of them fly up and come back down, the
+// pile gives a little, and after a beat a head peeks out of the middle.
+// Clicking the footer afterwards does it again.
+const jump = { state: 'idle', at: 0, burst: false, puff: false };
+const burstLeaves = [];
+// ---- the figure ---------------------------------------------------------------------
+// Everything about her is a number, a switch or a colour in K, so she can be tuned
+// on her own page (kid.html, a dial panel) and the copied values pasted back here.
+const KID_DEFAULTS = {
+  head: 22, bodyW: 19, bodyH: 1.5, legLen: 11, legW: 5, boot: 4.5, armLen: 9, armW: 5, hand: 3, lean: 0.18,
+  curl: 3, volume: 1.09, bob: 0.8, back: 0.5, bounce: 1, fringe: true,
+  eye: 1.3, blushAmount: 0.46, glasses: true, glassSize: 5.5, glassLine: 1.1,
+  scarfOn: true, scarfLen: 1.55,
+  top: '#991700', trousers: '#15046c', boots: '#2a1d14', scarf: '#bf3100',
+  skin: '#eebb93', hair: '#5b3519', specs: '#2f5d3e', blush: '#f0788c', ink: '#2a1d14',
+};
+const K = { ...KID_DEFAULTS };
+const hexCh = (hex, s) => (parseInt(hex.slice(1), 16) >> s) & 255;
+const shadeHex = (hex, f) => `rgb(${[16, 8, 0].map((s) => Math.max(0, Math.min(255, Math.round(hexCh(hex, s) * f)))).join(', ')})`;
+const alphaHex = (hex, a) => `rgba(${hexCh(hex, 16)}, ${hexCh(hex, 8)}, ${hexCh(hex, 0)}, ${a})`;
+// A full head of small curls. Wherever hair is wanted, curls are scattered from a
+// fixed seed (so they hold still from frame to frame) in three shades, and rows of
+// them are laid along every edge, so the mass never shows a straight line.
+function curlTone(i) { return i % 3 === 1 ? shadeHex(K.hair, 1.22) : i % 3 === 2 ? shadeHex(K.hair, 0.82) : K.hair; }
+function curlRow(c, x0, y0, x1, y1, r) {
+  const n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / (r * 1.15)));
+  for (let i = 0; i <= n; i++) {
+    c.fillStyle = curlTone(i + 1);
+    c.beginPath(); c.arc(x0 + ((x1 - x0) * i) / n + ((i * 5) % 3 - 1) * r * 0.25, y0 + ((y1 - y0) * i) / n + ((i * 7) % 3 - 1) * r * 0.3, r * (0.9 + ((i * 3) % 4) * 0.08), 0, Math.PI * 2); c.fill();
+  }
+}
+function curlScatter(c, inside, seed) {
+  let sd = seed;
+  const rnd = () => { sd = (sd + 0x6D2B79F5) | 0; let k = Math.imul(sd ^ (sd >>> 15), 1 | sd); k = (k + Math.imul(k ^ (k >>> 7), 61 | k)) ^ k; return ((k ^ (k >>> 14)) >>> 0) / 4294967296; };
+  const n = Math.round(Math.min(260, 1500 / (K.curl * K.curl)));
+  for (let i = 0; i < n; i++) {
+    const x = (rnd() * 2 - 1) * 20 * K.volume, y = (rnd() * 2 - 1) * 20 * K.volume, r = K.curl * (0.75 + rnd() * 0.5);
+    if (!inside(x, y)) continue;
+    c.fillStyle = curlTone(i);
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+  }
+}
+// a ring of overlapping curls round the outline
+function curls(c, cx, cy, from, to, rad) {
+  const n = Math.max(3, Math.round(((to - from) / 3.6) * 11 * (6.2 / K.curl)));
+  for (let i = 0; i < n; i++) {
+    const a = from + ((to - from) * i) / (n - 1);
+    const out = rad + (i % 2 ? 1.5 : -0.5), r = K.curl + ((i * 7) % 3) * 0.7;
+    c.fillStyle = curlTone(i);
+    c.beginPath(); c.arc(cx + Math.cos(a) * out, cy + Math.sin(a) * out, r, 0, Math.PI * 2); c.fill();
+  }
+}
+// side view, facing right; origin at the feet. pose is 'run' or 'jump'
+function drawKid(c, x, y, k, pose, ph, sy) {
+  c.save();
+  c.translate(x, y);
+  c.scale(k, k * sy);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  const air = pose === 'jump';
+  const hip = -K.legLen, seg = K.legLen / 2, arm = K.armLen / 2;
+  const bodyTop = 7 + K.bodyH + K.bodyW / 2, shoulder = -(7 + K.bodyH + K.bodyW * 0.13);
+  const limb = (ox, oy, a, bend, l1, l2, w, col, hand) => {
+    const kx = ox + Math.sin(a) * l1, ky = oy + Math.cos(a) * l1;
+    const fx = kx + Math.sin(a + bend) * l2, fy = ky + Math.cos(a + bend) * l2;
+    c.strokeStyle = col; c.lineWidth = w;
+    c.beginPath(); c.moveTo(ox, oy); c.lineTo(kx, ky); c.lineTo(fx, fy); c.stroke();
+    if (hand) { c.fillStyle = K.skin; c.beginPath(); c.arc(fx, fy, K.hand, 0, Math.PI * 2); c.fill(); }
+    else { c.strokeStyle = hand === false ? shadeHex(K.boots, 0.7) : K.boots; c.lineWidth = w + 1; c.beginPath(); c.moveTo(fx, fy); c.lineTo(fx + K.boot, fy); c.stroke(); }
+  };
+  const legA = (p) => Math.sin(p) * 0.85, legB = (p) => -(0.25 + 0.95 * Math.max(0, Math.cos(p)));
+  // far leg, far arm
+  if (air) limb(0, hip, 0.35, -1.25, seg, seg, K.legW, shadeHex(K.trousers, 0.7), false); else limb(0, hip, legA(ph + Math.PI), legB(ph + Math.PI), seg, seg, K.legW, shadeHex(K.trousers, 0.7), false);
+  c.save();
+  c.translate(0, hip);
+  c.rotate(air ? -0.12 : K.lean);                          // leaning into the run
+  if (air) limb(0, shoulder, 2.75, 0.2, arm, arm * 0.9, K.armW, shadeHex(K.top, 0.82), true); else limb(0, shoulder, Math.sin(ph) * 0.9, 1.1, arm, arm * 0.9, K.armW, shadeHex(K.top, 0.82), true);
+  c.restore();
+  // near leg
+  if (air) limb(0, hip, 0.95, -1.5, seg, seg, K.legW, K.trousers); else limb(0, hip, legA(ph), legB(ph), seg, seg, K.legW, K.trousers);
+  c.save();
+  c.translate(0, hip);
+  c.rotate(air ? -0.12 : K.lean);
+  // cartoon proportions: a round little body, stubby limbs, and a big head
+  c.strokeStyle = K.top; c.lineWidth = K.bodyW;             // jumper, round as a bean
+  c.beginPath(); c.moveTo(0, -7); c.lineTo(0, -7 - Math.max(0.01, K.bodyH)); c.stroke();
+  if (K.scarfOn) {
+    // scarf, its tail streaming out behind
+    const sy0 = -bodyTop + 1, L = K.scarfLen;
+    c.strokeStyle = K.scarf; c.lineWidth = 6;
+    c.beginPath(); c.moveTo(-5, sy0); c.quadraticCurveTo(-5 - 11 * L, sy0 - 4 + Math.sin(ph * 1.3) * 3, -5 - 23 * L, sy0 + (air ? -10 : 3) * L + Math.sin(ph) * 5); c.stroke();
+    c.lineWidth = 7; c.beginPath(); c.moveTo(-9, sy0); c.lineTo(10, sy0 + 1); c.stroke();
+  }
+  // the head, drawn in its own units (a radius of 14) and scaled to K.head
+  c.save();
+  c.translate(3, -(bodyTop + K.head * 0.9)); c.scale(K.head / 14, K.head / 14);
+  c.fillStyle = K.skin; c.beginPath(); c.arc(0, 0, 14, 0, Math.PI * 2); c.fill();
+  // the arm of the glasses runs back level and disappears under the hair
+  if (K.glasses) { c.strokeStyle = K.specs; c.lineWidth = K.glassLine; c.beginPath(); c.moveTo(7.5 - K.glassSize * 0.62, -1.4); c.lineTo(-2, -1.8); c.stroke(); }
+  // hair: a mop over the crown and down the back to the jaw, a heavy fringe coming
+  // forward over the brow, and the side falling in front of the ear
+  const from = 1.95 + Math.max(0, 1 - K.bob) * 1.1, vol = K.volume;
+  const ax = Math.cos(from) * 14.5, ay = Math.sin(from) * 14.5, fx = Math.cos(5.62) * 14.5, fy = Math.sin(5.62) * 14.5;
+  // running, the whole mop bobs a beat behind her steps and gives a little; in the air it lifts
+  const bob = air ? -1.3 * K.bounce : -(0.5 + 0.5 * Math.cos(ph * 2 - 0.9)) * 1.3 * K.bounce;   // only ever up from rest, so the fringe never drops over her glasses
+  c.save();
+  c.translate(0, bob);
+  // a little more length low at the back of the head, well clear of the neck; it swings the most
+  for (let j = Math.round(K.back * 2) - 1; j >= 0; j--) curls(c, -1 - j * 0.8, bob * 0.6 * (j + 1), from + 0.3, Math.PI + 0.1 - j * 0.12, (14.6 + j * 2.2) * vol);
+  c.fillStyle = K.hair;
+  c.beginPath(); c.arc(0, 0, 14.5, from, 5.62); c.lineTo(3.5, -6.5); c.lineTo(0.5, 3); c.closePath(); c.fill();
+  const inHair = (x, y) => {
+    const r = Math.hypot(x, y); let a = Math.atan2(y, x); if (a < 0) a += Math.PI * 2;
+    if (r > 15.5 * vol || a < from || a > 5.68) return false;
+    return !(x > 0.5 && y > -7 + x * 0.1) && !(x > -1 && y > 3);     // keeps off the face
+  };
+  curlScatter(c, inHair, 7);
+  curls(c, 0, 0, from, 5.6, 13.5 * vol);
+  curlRow(c, fx, fy, 3.5, -6.5, K.curl);                              // the fringe's lower edge, over the brow
+  curlRow(c, 3.5, -6.5, 0.5, 3, K.curl);                              // down in front of the ear
+  curlRow(c, 0.5, 3, ax, ay, K.curl);                                 // and along the jaw to the nape
+  for (let j = 0; K.bob >= 1 && j <= Math.round((K.bob - 1) * 4); j++) curlRow(c, -13 * vol, 9 + j * 5.5, -3, 10 + j * 5.5, K.curl);
+  c.restore();
+  c.fillStyle = alphaHex(K.blush, K.blushAmount); c.beginPath(); c.arc(5, 6, 3, 0, Math.PI * 2); c.fill();
+  // a standing oval for an eye, and the lens an upright oval too: seen from the side it is narrowed
+  c.fillStyle = K.ink; c.beginPath(); c.ellipse(7.5, -1, K.eye * 0.72, K.eye * 1.3, 0, 0, Math.PI * 2); c.fill();
+  if (K.glasses) { c.strokeStyle = K.specs; c.lineWidth = K.glassLine; c.beginPath(); c.ellipse(7.5, -1, K.glassSize * 0.62, K.glassSize, 0, 0, Math.PI * 2); c.moveTo(7.5 + K.glassSize * 0.62, -2); c.quadraticCurveTo(7.5 + K.glassSize * 0.62 + 1.4, -3.2, 7.5 + K.glassSize * 0.62 + 2.6, -2.2); c.stroke(); }
+  if (air) { c.fillStyle = K.ink; c.beginPath(); c.ellipse(8, 6.5, 2.6, 3.2, 0, 0, Math.PI * 2); c.fill(); }
+  else { c.strokeStyle = K.ink; c.lineWidth = 1.5; c.beginPath(); c.arc(6.5, 4, 4, 0.25, 1.7); c.stroke(); }
+  c.restore();
+  // near arm
+  if (air) limb(0, shoulder, 2.45, 0.25, arm, arm * 0.9, K.armW, K.top, true); else limb(0, shoulder, -Math.sin(ph) * 0.9, 1.1, arm, arm * 0.9, K.armW, K.top, true);
+  c.restore();
+  c.restore();
+}
+// facing us, just the head, for peeking out of the leaves
+function drawPeek(c, x, y, k, blink) {
+  c.save();
+  c.translate(x, y);
+  c.scale((k * K.head) / 14, (k * K.head) / 14);
+  const reach = 0.95 * Math.min(1, K.bob), vol = K.volume;
+  // behind the face: the mass at the sides, down to the jaw (or further, for a longer bob)
+  const low = Math.sin(reach) * 15.5 + Math.max(0, K.bob - 1) * 22;
+  curlScatter(c, (x, y) => Math.hypot(x, y * 0.92) < 17 * vol && Math.hypot(x, y) > 9 && y < low, 11);
+  curls(c, 0, 0, Math.PI - reach, Math.PI * 2 + reach, 15.5 * vol);
+  for (const sx of [-1, 1]) for (let j = 0; K.bob > 1 && j <= Math.round((K.bob - 1) * 4); j++) curlRow(c, sx * 16 * vol, 12 + j * 5.5, sx * 10, 12 + j * 5.5, K.curl);
+  c.fillStyle = K.skin; c.beginPath(); c.arc(0, 0, 15, 0, Math.PI * 2); c.fill();
+  // over the face: the crown, and a heavy curly fringe down to the brows
+  c.fillStyle = K.hair; c.beginPath(); c.arc(0, 0, 15.6, Math.PI + 0.62, Math.PI * 2 - 0.62); c.closePath(); c.fill();
+  curlScatter(c, (x, y) => Math.hypot(x, y) < 16 * vol && y < (K.fringe ? -6.5 : -10), 23);
+  for (const sx of [-1, 1]) curlRow(c, sx * 15, -7, sx * 13.5, 4, K.curl);          // the sides coming in over the temples
+  if (K.fringe) { curlRow(c, -13, -7.5, 13, -7.5, K.curl); curlRow(c, -11.5, -5.6, 11.5, -5.6, K.curl * 0.9); }
+  else curlRow(c, -11, -10.5, 11, -10.5, K.curl);
+  c.fillStyle = alphaHex(K.blush, K.blushAmount);
+  for (const sx of [-1, 1]) { c.beginPath(); c.arc(sx * 9.5, 6.5, 3, 0, Math.PI * 2); c.fill(); }
+  c.fillStyle = K.ink; c.strokeStyle = K.ink; c.lineWidth = 1.6; c.lineCap = 'round';
+  for (const sx of [-1, 1]) {
+    c.beginPath();
+    if (blink) { c.moveTo(sx * 6 - 2, 1); c.lineTo(sx * 6 + 2, 1); c.stroke(); }
+    else { c.ellipse(sx * 6, 0.5, K.eye * 0.78, K.eye * 1.35, 0, 0, Math.PI * 2); c.fill(); }   // standing ovals
+  }
+  if (K.glasses) {
+    c.strokeStyle = K.specs; c.lineWidth = K.glassLine;
+    const g = K.glassSize + 0.2, gx = Math.max(6, g + 1.3);   // always room for the bridge over the nose
+    c.beginPath();
+    for (const sx of [-1, 1]) { c.moveTo(sx * gx + g, 0.5); c.arc(sx * gx, 0.5, g, 0, Math.PI * 2); }
+    c.moveTo(-gx + g, -0.3); c.quadraticCurveTo(0, -2.2, gx - g, -0.3);
+    c.stroke();
+  }
+  c.restore();
+}
+// the tuned values from kid.html ride along when this page is opened with #dials
+if (location.hash.includes('dials')) { try { Object.assign(K, JSON.parse(localStorage.getItem('fall-kid') || '{}')); } catch (e) { /* storage blocked */ } }
+// leaves thrown up by a landing: up and out from around atX, then back down onto the pile
+function tossLeaves(W, n, power, atX, spread) {
+  for (let i = 0; i < n; i++) {
+    const fx = atX + (Math.random() * 2 - 1) * spread;
+    burstLeaves.push({
+      fx, fy: -pileH(fx, W) * 0.84 - 4,                       // relative to the ground line
+      vx: ((fx - atX) / spread) * 170 * power + (Math.random() - 0.35) * 130 * power,
+      vy: -(140 + Math.random() * 300) * power,
+      roll: Math.random() * 6.3, turn: (Math.random() - 0.5) * 7, size: (20 + Math.random() * 24) * (W < 600 ? 0.8 : 1),
+      sprite: pileSprites[Math.floor(Math.random() * pileSprites.length)], depth: Math.random(), ph: Math.random() * 6.3,
+    });
+  }
+}
+// the pile gives under a landing and wobbles back
+let pileHitAt = -10;
+function wobblePile(t, W) {
+  const e = t - pileHitAt;
+  if (e > 2.1) return;
+  const sc = 1 - 0.08 * Math.exp(-4 * e) * Math.cos(13 * e);
+  pileCanvas.style.transformOrigin = `${pileShape(W).cx}px ${foot.clientHeight - GROUND_PAD}px`;
+  pileCanvas.style.transform = e < 2 ? `scaleY(${sc.toFixed(4)})` : '';
+}
+function flyBurst(t, dt, fr, groundY) {
+  const W = fr.width;
+  for (let i = burstLeaves.length - 1; i >= 0; i--) {
+    const B = burstLeaves[i];
+    B.vy += 520 * dt;
+    B.vx -= B.vx * 1.5 * dt;
+    if (B.vy > 0) { B.vy -= B.vy * 2.2 * dt; B.vx += Math.sin(t * 3 + B.ph) * 60 * dt; }   // flutters on the way down
+    B.fx += B.vx * dt; B.fy += B.vy * dt;
+    B.turn -= B.turn * 1.2 * dt;
+    B.roll += B.turn * dt;
+    const h = pileH(B.fx, W);
+    const restY = -(h > 6 ? h * (0.3 + 0.68 * B.depth) : B.depth * 12);
+    if (B.vy > 0 && B.fy >= restY) {
+      settled.push({ sprite: B.sprite, fx: B.fx, fy: restY - GROUND_PAD, size: B.size, roll: B.roll, rollTo: 0, squash: h > 6 ? 0.45 + Math.random() * 0.45 : 0.24 + Math.random() * 0.26, at: t, goneAt: 0 });
+      burstLeaves.splice(i, 1);
+      continue;
+    }
+    layLeaf(lctx, B.sprite, fr.left + B.fx, groundY + B.fy, B.size, B.roll, 0.85, 0, 1);
+  }
+}
+function flyJump(t, dt, fr, groundY) {
+  const W = fr.width, p = pileShape(W);
+  const k = Math.max(0.62, Math.min(1, W / 1400));          // the figure keeps its size whatever the pile's
+  const surf = (x) => groundY - pileH(x, W) * 0.84;          // x in footer coordinates
+  if (jump.state === 'idle') {
+    if (!landed || !W || groundY > innerHeight - 8 || groundY < 0) return;
+    Object.assign(jump, { state: reduceMotion ? 'peek' : 'go', at: t + 0.45, burst: false, puff: false });
+  }
+  const x0 = -50, xTake = Math.max(20, p.cx - Math.max(p.s * 2.4, 190 * k));
+  const RUN = (xTake - x0) / (430 * k), LEAP = 0.72, SINK = 0.22, HIDE = 0.75, RISE = 0.6;
+  let tau = t - jump.at;
+  if (jump.state === 'peek' && reduceMotion) tau = RUN + LEAP + SINK + HIDE + RISE + (t - jump.at);
+  const throwLeaves = (n, power) => tossLeaves(W, n, power, p.cx, p.s * 0.85);
+  if (tau >= 0 && jump.state === 'go') {
+    // everything that goes into the pile disappears below its surface
+    lctx.save();
+    lctx.beginPath();
+    lctx.moveTo(fr.left - 200, -3000); lctx.lineTo(fr.left - 200, groundY + 6);
+    for (let x = p.cx - p.s * 1.6; x <= p.cx + p.s * 1.6; x += 5) lctx.lineTo(fr.left + x, x < p.cx - p.s * 1.5 || x > p.cx + p.s * 1.5 ? groundY + 6 : surf(x) + 6);
+    lctx.lineTo(fr.right + 200, groundY + 6); lctx.lineTo(fr.right + 200, -3000);
+    lctx.closePath(); lctx.clip();
+    if (tau < RUN) {
+      const x = x0 + (xTake - x0) * (tau / RUN), ph = tau * 15;
+      drawKid(lctx, fr.left + x, groundY - Math.abs(Math.sin(ph)) * 3 * k, k, 'run', ph, 1);
+    } else if (tau < RUN + LEAP + SINK) {
+      const q = Math.min(1, (tau - RUN) / LEAP), sink = Math.max(0, (tau - RUN - LEAP) / SINK);
+      const landH = p.H * 0.4 * (1 - sink);
+      const x = xTake + (p.cx - xTake) * Math.min(1, (tau - RUN) / (LEAP + SINK * 0.5));
+      const y = groundY - landH * q - (p.H + 70 * k) * 4 * q * (1 - q) * 0.62;
+      drawKid(lctx, fr.left + x, y, k, 'jump', tau * 9, 1 - 0.62 * sink);
+      if (!jump.burst && q > 0.84) { jump.burst = true; pileHitAt = t; throwLeaves(W < 600 ? 16 : 26, 1); }
+    }
+    lctx.restore();
+  }
+  // the head coming up through the middle
+  const peekFrom = RUN + LEAP + SINK + HIDE;
+  if (tau > peekFrom && (jump.state === 'go' || jump.state === 'peek' || jump.state === 'done')) {
+    const r = Math.min(1, (tau - peekFrom) / RISE);
+    const back = 1 + 2.2 * Math.pow(r - 1, 3) + 1.2 * Math.pow(r - 1, 2);   // rises a touch too far, settles back
+    if (!jump.puff && !reduceMotion) { jump.puff = true; throwLeaves(6, 0.45); }
+    if (r >= 1) jump.state = 'done';
+    const hx = fr.left + p.cx, top = surf(p.cx);
+    const hk = (k * K.head) / 20;                              // the peek scales with her head
+    const hy = top + 42 * hk - (42 * hk + 13 * hk) * back + Math.sin(t * 1.4) * 1.1 * r;
+    lctx.save();
+    lctx.beginPath(); lctx.rect(hx - 80, top - 160, 160, 160 + 5 * k); lctx.clip();
+    drawPeek(lctx, hx, hy, k, (t % 3.7) < 0.13);
+    layLeaf(lctx, pileSprites[3], hx + 10 * hk, hy - 22 * hk, 24 * hk, 0.9, 0.8, 0, 1);   // one caught in the hair
+    lctx.restore();
+    // a few leaves in front, so the head sits in the pile rather than behind a line
+    const cover = [[-27, 4, 1.1, 5], [-14, 8, 3.3, 11], [-2, 10, 4.4, 9], [11, 9, 2.3, 14], [25, 4, 5.6, 20]];
+    for (const [dx, dy, roll, si] of cover) layLeaf(lctx, pileSprites[si], hx + dx * hk, top + (dy + 7) * k, 30 * hk, roll, 0.6, 0.05, r);
+  }
+}
+
+// ---- the other footer: a trampoline ---------------------------------------------------
+// This is the footer visitors get. (The earlier one, where a little figure runs in
+// and jumps into the pile, is kept but hidden: open the page with ?footer=kid.)
+// No figure here: the visitor's own cursor is the
+// one that jumps. Wherever they click above the little trampoline, the cursor is
+// dropped from that spot, straight down or at an angle depending on where they
+// stand, and the trampoline shoots it toward the pile. A dashed line shows the
+// whole flight before they let go, so it can be aimed.
+const FOOT_MODE = new URLSearchParams(location.search).get('footer') === 'kid' ? 'jump' : 'trampoline';
+const mouse = { x: 0, y: 0, seen: false };
+addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.seen = true; });
+const tramp = { shots: [], hitAt: -10, used: false, stuck: null };
+const TRAMP_TILT = 0.16, TRAMP_G = 1800, SHOT_DT = 1 / 120;
+function trampSpot(W) {
+  const p = pileShape(W), k = Math.max(0.62, Math.min(1, W / 1400));
+  return { x: Math.max(64, p.cx - Math.max(p.s * 4.3, 340 * k)), h: 36 * k, w: 104 * k, k };
+}
+// the whole flight worked out ahead of time, in footer coordinates (y is measured
+// from the ground line, negative upward): the drop, the bounce, the arc, the landing
+function plotShot(fx, gy, W) {
+  const T = trampSpot(W), ty = -T.h, fall = ty - gy;
+  if (fall < 30) return null;
+  const t1 = Math.sqrt((2 * fall) / TRAMP_G), vx0 = (T.x - fx) / t1;
+  const pts = [];
+  for (let q = 0; q < t1; q += SHOT_DT) pts.push({ x: fx + vx0 * q, y: gy + 0.5 * TRAMP_G * q * q });
+  const bounceI = pts.length;
+  pts.push({ x: T.x, y: ty });                               // the touch itself, so the drawn line turns on the mat
+  const nx = Math.sin(TRAMP_TILT), ny = -Math.cos(TRAMP_TILT);
+  const d = vx0 * nx + TRAMP_G * t1 * ny;
+  let vx = (vx0 - 2 * d * nx) * 0.82, vy = (TRAMP_G * t1 - 2 * d * ny) * 0.82, x = T.x, y = ty, land = { off: true };
+  for (let i = 0; i < 720; i++) {
+    vy += TRAMP_G * SHOT_DT; x += vx * SHOT_DT; y += vy * SHOT_DT;
+    pts.push({ x, y });
+    const h = pileH(x, W) * 0.84;
+    if (vy > 0 && y >= -h + (h > 6 ? 8 : 0)) { land = { x, y, pile: h > 6, speed: Math.hypot(vx, vy), angle: Math.atan2(vy, vx) }; break; }
+    if (x < -80 || x > W + 80) break;
+  }
+  return { pts, bounceI, land };
+}
+// the ordinary arrow cursor, tip at the origin; rot turns the way its tip points
+const ARROW_TIP = Math.atan2(-0.93, -0.37);
+function drawArrow(c, x, y, rot, scale, alpha) {
+  c.save();
+  c.translate(x, y); c.rotate(rot - ARROW_TIP); c.scale(scale, scale); c.translate(-5, -10);   // turns about its middle
+  c.globalAlpha = alpha;
+  c.beginPath();
+  c.moveTo(0, 0); c.lineTo(0, 17); c.lineTo(4, 13.2); c.lineTo(6.8, 19.6); c.lineTo(9.4, 18.5); c.lineTo(6.7, 12.2); c.lineTo(12, 12.2); c.closePath();
+  c.lineJoin = 'round'; c.lineWidth = 2.2; c.strokeStyle = '#fff'; c.stroke();
+  c.fillStyle = '#111'; c.fill();
+  c.restore();
+}
+function flyTramp(t, dt, fr, groundY) {
+  const W = fr.width;
+  if (!landed || !W || groundY > innerHeight + 40 || groundY < 0) return;
+  const T = trampSpot(W), p = pileShape(W);
+  const tx = fr.left + T.x, ty = groundY - T.h;
+  // The trampoline, seen from a little above: a round black mat hung on springs
+  // inside a padded blue rim, on bent steel legs, with its shadow on the ground.
+  // The mat dips and rings when it is hit.
+  const e = t - tramp.hitAt, dip = e < 1.6 ? 9 * T.k * Math.exp(-4.5 * e) * Math.cos(24 * e) : 0;
+  const cs = Math.cos(TRAMP_TILT), sn = Math.sin(TRAMP_TILT), rx = T.w / 2, ry = T.w * 0.15, u = T.k;
+  const at = (ex, ey) => [tx + ex * cs - ey * sn, ty + ex * sn + ey * cs];   // a point on the tilted frame, on screen
+  lctx.save();
+  lctx.lineCap = 'round'; lctx.lineJoin = 'round';
+  const shade = lctx.createRadialGradient(tx, groundY + 2, 0, tx, groundY + 2, rx * 1.25);
+  shade.addColorStop(0, 'rgba(50, 28, 6, 0.26)'); shade.addColorStop(1, 'rgba(50, 28, 6, 0)');
+  lctx.save(); lctx.translate(tx, groundY + 2); lctx.scale(1, 0.13); lctx.translate(-tx, -groundY - 2);
+  lctx.fillStyle = shade; lctx.beginPath(); lctx.arc(tx, groundY + 2, rx * 1.25, 0, Math.PI * 2); lctx.fill();
+  lctx.restore();
+  // legs: the far pair darker and set in, the near pair lighter, each with a foot
+  for (const [ex, ey, col, wd] of [[-rx * 0.62, -ry * 0.7, '#565b63', 2.6], [rx * 0.62, -ry * 0.7, '#565b63', 2.6], [-rx * 0.8, ry * 0.55, '#8d939b', 3.2], [rx * 0.8, ry * 0.55, '#8d939b', 3.2]]) {
+    const [X, Y] = at(ex, ey), gy = groundY - (ey < 0 ? 3 * u : 0), splay = Math.sign(ex) * 5 * u;
+    lctx.strokeStyle = col; lctx.lineWidth = wd * u;
+    lctx.beginPath(); lctx.moveTo(X, Y); lctx.quadraticCurveTo(X + splay * 0.2, (Y + gy) / 2, X + splay, gy); lctx.stroke();
+    lctx.beginPath(); lctx.moveTo(X + splay - 5 * u, gy); lctx.lineTo(X + splay + 5 * u, gy); lctx.stroke();
+  }
+  lctx.translate(tx, ty); lctx.rotate(TRAMP_TILT);
+  // the padded rim has some thickness: its side first, then its top
+  lctx.fillStyle = '#1f4379'; lctx.beginPath(); lctx.ellipse(0, 4.5 * u, rx, ry, 0, 0, Math.PI * 2); lctx.fill();
+  const pad = lctx.createLinearGradient(0, -ry, 0, ry);
+  pad.addColorStop(0, '#2c5c9f'); pad.addColorStop(1, '#3f74bb');
+  lctx.fillStyle = pad; lctx.beginPath(); lctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; lctx.lineWidth = 1.2 * u;
+  lctx.beginPath(); lctx.ellipse(0, 0, rx * 0.93, ry * 0.9, 0, Math.PI * 1.05, Math.PI * 1.75); lctx.stroke();
+  // the gap where the springs are
+  lctx.fillStyle = '#c9c4b8'; lctx.beginPath(); lctx.ellipse(0, 0.5 * u, rx * 0.8, ry * 0.76, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = '#6d7077'; lctx.lineWidth = 1.1 * u;
+  lctx.beginPath();
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+    lctx.moveTo(ca * rx * 0.8, 0.5 * u + sa * ry * 0.76); lctx.lineTo(ca * rx * 0.68, 0.5 * u + dip * 0.35 + sa * ry * 0.63);
+  }
+  lctx.stroke();
+  // the mat, sagging in the middle when something lands on it
+  const mat = lctx.createRadialGradient(0, dip, 0, 0, dip * 0.5, rx * 0.7);
+  mat.addColorStop(0, dip > 0.5 ? '#0e0e10' : '#1c1b1d'); mat.addColorStop(1, '#2b2a2d');
+  lctx.fillStyle = mat; lctx.beginPath(); lctx.ellipse(0, 0.5 * u + dip * 0.45, rx * 0.7, ry * 0.65 + Math.abs(dip) * 0.25, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'; lctx.lineWidth = 1 * u;
+  lctx.beginPath(); lctx.ellipse(0, 0.5 * u + dip * 0.45, rx * 0.5, ry * 0.42, 0, Math.PI * 1.1, Math.PI * 1.6); lctx.stroke();
+  lctx.restore();
+  lctx.save();
+  lctx.restore();
+  // the flight as it would go from where the cursor is now
+  const aiming = mouse.seen && tramp.shots.length === 0 && mouse.y < ty - 30 && mouse.y > 0;
+  if (aiming) {
+    const plot = plotShot(mouse.x - fr.left, mouse.y - groundY, W);
+    if (plot) {
+      lctx.save();
+      lctx.setLineDash([11, 11]); lctx.lineWidth = 4; lctx.lineCap = 'round'; lctx.lineJoin = 'round';
+      lctx.strokeStyle = 'rgba(2, 56, 122, 0.3)';
+      lctx.beginPath();
+      plot.pts.forEach((q, i) => { if (i % 3 && i !== plot.pts.length - 1 && i !== plot.bounceI) return; const X = fr.left + q.x, Y = groundY + q.y; if (i) lctx.lineTo(X, Y); else lctx.moveTo(X, Y); });
+      lctx.stroke();
+      if (!plot.land.off) { lctx.setLineDash([]); lctx.lineWidth = 2; lctx.beginPath(); lctx.arc(fr.left + plot.land.x, groundY + plot.land.y, 7, 0, Math.PI * 2); lctx.stroke(); }
+      lctx.restore();
+    }
+  }
+  // the last one to land: poking back out of the pile, or stuck in the ground for a while
+  const S = tramp.stuck;
+  if (S) {
+    const age = t - S.at;
+    if (S.pile) {
+      const up = smoother((age - 0.7) / 0.5), top = groundY - pileH(S.x, W) * 0.84;
+      if (up > 0) {
+        lctx.save();
+        lctx.beginPath(); lctx.rect(fr.left + S.x - 40, top - 60, 80, 60 + 4); lctx.clip();
+        drawArrow(lctx, fr.left + S.x, top + 16 - 22 * up, -Math.PI / 2 + Math.sin(t * 2.2) * 0.1 * up, 1.2 * T.k, 1);
+        lctx.restore();
+        layLeaf(lctx, pileSprites[7], fr.left + S.x - 7, top + 5, 24 * T.k, 1.3, 0.6, 0.05, up);
+        layLeaf(lctx, pileSprites[12], fr.left + S.x + 8, top + 6, 24 * T.k, 4.1, 0.6, 0.05, up);
+      }
+    } else {
+      const out = 1 - ramp01((age - 3.5) / 1);
+      if (out <= 0) tramp.stuck = null;
+      else {
+        lctx.save();
+        lctx.beginPath(); lctx.rect(fr.left + S.x - 40, groundY - 60, 80, 60 + 2); lctx.clip();
+        drawArrow(lctx, fr.left + S.x, groundY - 5 * T.k, S.angle, 1.2 * T.k, out);
+        lctx.restore();
+      }
+    }
+  }
+  // cursors in the air
+  for (let i = tramp.shots.length - 1; i >= 0; i--) {
+    const shot = tramp.shots[i], n = shot.plot.pts.length;
+    const at = Math.floor((t - shot.at) / SHOT_DT);
+    if (!shot.bounced && at >= shot.plot.bounceI) { shot.bounced = true; tramp.hitAt = t; }
+    if (at >= n - 1) {
+      const L = shot.plot.land;
+      tramp.shots.splice(i, 1);
+      if (!L.off) {
+        tramp.stuck = { x: L.x, pile: L.pile, angle: L.angle, at: t };
+        if (L.pile) { pileHitAt = t; tossLeaves(W, Math.round((W < 600 ? 9 : 14) * Math.min(1.6, L.speed / 900)), Math.min(1.1, L.speed / 1000), L.x, p.s * 0.55); }
+      }
+      continue;
+    }
+    const a = shot.plot.pts[at], b = shot.plot.pts[Math.min(n - 1, at + 2)];
+    drawArrow(lctx, fr.left + a.x, groundY + a.y, Math.atan2(b.y - a.y, b.x - a.x), 1.2 * T.k, 1);
+  }
+  document.documentElement.style.cursor = tramp.shots.length ? 'none' : '';   // it has left the hand
+}
+const ramp01 = (x) => Math.min(1, Math.max(0, x));
+if (FOOT_MODE === 'trampoline') {
+  addEventListener('pointerdown', (e) => {
+    if (!foot || !landed || tramp.shots.length || (e.target.closest && e.target.closest('a, button'))) return;
+    const fr = foot.getBoundingClientRect(), groundY = fr.bottom - GROUND_PAD;
+    if (groundY > innerHeight + 40 || groundY < 0) return;
+    const plot = plotShot(e.clientX - fr.left, e.clientY - groundY, fr.width);
+    if (!plot) return;
+    tramp.used = true;
+    tramp.shots.push({ plot, at: lastT, bounced: false });
+  });
+}
+// for checking from the console: __jump(1.2) shows the moment 1.2s into the run
+window.__jump = (tau) => Object.assign(jump, { state: 'go', at: lastT - tau, burst: false, puff: false });
+if (foot) foot.addEventListener('click', () => { if (FOOT_MODE === 'jump' && jump.state === 'done' && !reduceMotion) jump.state = 'idle'; });
+
+const settled = [];        // leaves that have landed; they belong to the footer now and scroll with it
+const SETTLED_MAX = 90;    // beyond this the oldest fade away, so it never silts up
+function flyLeaves(t, dt, aboveTrees) {
+  // a handful in the air at any time for as long as the camera is above the
+  // treetops. The first few are pushed in from the edges; after that they come
+  // down from the top, all the way to the footer.
+  if (!aboveTrees && !flight) leavesMade = 0; // back under the canopy: the next visit starts fresh
+  if (heroDue) { heroDue = false; if (leavesMade < P.leafCount) { spawnLeaf(t, true); leavesMade++; nextLeafAt = t + 0.9; } }
+  else if (aboveTrees && t > nextLeafAt && looseLeaves.length < P.leafCount) {
+    const later = leavesMade >= P.leafCount;
+    spawnLeaf(t, false, later);
+    leavesMade++;
+    nextLeafAt = t + (later ? 1.4 + Math.random() * 3 : 0.8 + Math.random() * 1.6);
+  }
+  lctx.clearRect(0, 0, innerWidth, innerHeight);
+  // where the footer's ground is on screen right now (no footer: the leaves just fall off the bottom)
+  const fr = foot ? foot.getBoundingClientRect() : null;
+  const groundY = fr ? fr.bottom - GROUND_PAD : Infinity;
+  // landed leaves first, so the ones still falling pass in front of them
+  while (settled.length > SETTLED_MAX && !settled[0].goneAt) settled[0].goneAt = t;
+  for (let i = fr ? settled.length - 1 : -1; i >= 0; i--) {
+    const S = settled[i];
+    const out = S.goneAt ? 1 - (t - S.goneAt) / 3 : 1;
+    if (out <= 0) { settled.splice(i, 1); continue; }
+    const y = fr.bottom + S.fy;
+    if (y < -80 || y > innerHeight + 80) continue;
+    const k = smoother((t - S.at) / 0.9);                  // easing down flat, and down to the size of the pile's own leaves
+    layLeaf(lctx, S.sprite, fr.left + S.fx, y, S.size + (Math.min(S.size, 40) - S.size) * k, S.roll + S.rollTo * k, 1 + (S.squash - 1) * k, 0.12 * k, out);
+  }
+  if (fr) {
+    if (FOOT_MODE === 'trampoline') flyTramp(t, dt, fr, groundY); else flyJump(t, dt, fr, groundY);
+    wobblePile(t, fr.width);
+    flyBurst(t, dt, fr, groundY);
+  }
+  for (let i = looseLeaves.length - 1; i >= 0; i--) {
+    const L = looseLeaves[i];
+    const gone = Math.hypot(L.x - L.from.x, L.y - L.from.y);
+    if (L.fallAt === null && gone > L.total * L.giveOut) L.fallAt = t;
+    // while pushed, the path curls a little to one side of the straight line
+    const arc = L.fallAt === null ? Math.sin(Math.min(1, gone / (L.total * L.giveOut)) * Math.PI) * L.curl : 0;
+    let wantX = L.push.x - (L.push.y / (Math.hypot(L.push.x, L.push.y) || 1)) * arc;
+    let wantY = L.push.y + (L.push.x / (Math.hypot(L.push.x, L.push.y) || 1)) * arc;
+    let ease = 0.08;
+    if (L.fallAt !== null) {
+      const f = t - L.fallAt;
+      // side to side, with a slower second wander so no two zigzags match
+      wantX = (Math.sin(f * L.swayHz + L.spin) + Math.sin(f * L.swayHz * L.sway2Hz + L.spin * 2) * L.sway2) * L.swayAmp * P.leafSway;
+      wantY = Math.min(L.sink, 8 + f * 5) * P.leafFall;    // and slowly down
+      ease = L.settle;
+    }
+    L.vx += (wantX - L.vx) * ease;
+    L.vy += (wantY - L.vy) * ease;
+    L.x += L.vx * dt;
+    L.y += L.vy * dt;
+    // each leaf has its own facing and turns only slowly; once it is sinking it
+    // leans into every swing and rocks, as before. No spinning about itself.
+    const age = t - L.born;
+    const sinking = L.fallAt === null ? 0 : Math.min(1, (t - L.fallAt) / 1.5);
+    const lean = (Math.atan2(L.vx, 140) * 0.9 + Math.sin(t * L.rockHz + L.spin) * L.rock) * sinking;
+    const roll = L.tilt + L.drift * age + lean;
+    const size = L.size * P.leafSize;
+    // touching down: on the face of the pile if it is over it, else on the ground
+    if (fr && L.fallAt !== null && L.vy > 0) {
+      const h = pileH(L.x - fr.left, fr.width);
+      const restY = groundY - (h > 6 ? h * (0.3 + 0.68 * L.depth) : L.depth * 12);
+      if (L.y >= restY) {
+        settled.push({ sprite: L.sprite, fx: L.x - fr.left, fy: restY - fr.bottom, size, roll, rollTo: (Math.random() - 0.5) * 0.5,
+          squash: h > 6 ? 0.45 + Math.random() * 0.45 : 0.24 + Math.random() * 0.26, at: t, goneAt: 0 });
+        looseLeaves.splice(i, 1);
+        continue;
+      }
+    }
+    if (L.y > innerHeight + 70 || L.x < -120 || L.x > innerWidth + 120) { looseLeaves.splice(i, 1); continue; }
+    // The blade is cupped along its spine. Each half is drawn on its own: as the
+    // leaf rolls slowly about the spine one half turns toward us and widens while
+    // the other turns away, narrows and falls into shade.
+    const theta = Math.sin(t * L.turnHz + L.spin) * L.turn;
+    const kl = Math.cos(theta + L.fold), kr = Math.cos(theta - L.fold);
+    lctx.save();
+    lctx.translate(L.x, L.y);
+    lctx.rotate(roll);
+    const fade = Math.min(1, (t - L.born) * 2), half = size / 2;
+    const halves = [[0, -half * kl, half * kl + 0.6, kl], [64, 0, half * kr, kr]]; // [source x, dest x, dest width, facing]
+    for (const [sx, dx, dw, k] of halves) {
+      lctx.globalAlpha = fade;
+      lctx.drawImage(L.sprite.base, sx, 0, 64, 128, dx, -half, dw, size);
+      lctx.globalAlpha = fade * Math.min(0.5, (1 - k) * 4);
+      lctx.drawImage(L.sprite.dark, sx, 0, 64, 128, dx, -half, dw, size);
+    }
+    lctx.restore();
+  }
+}
+
+// ---- film grain on the white page ---------------------------------------------
+// Over the forest and the sky the grain is drawn inside the finishing pass. On the
+// white page (which is ordinary page content) it is this layer: a tile of dark
+// specks laid over everything, shifted to a new spot many times a second so the
+// grain crawls the way silver halide does. Over white, dark specks at this
+// strength look the same as the hard-light grain used to, and they cost nothing
+// to composite, where a blend-mode layer over the whole page made scrolling jerky.
+const grainW = document.getElementById('grainWhite');
+let washNow = 0;
+const TILE = 192;
+function bakeTiles() {
+  const c = document.createElement('canvas');
+  c.width = c.height = TILE;
+  const cx = c.getContext('2d');
+  const img = cx.createImageData(TILE, TILE);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // one speck per device pixel: the darker half of the old grain, as black with a little alpha
+    const v = (Math.random() - 0.5) * (P.grainContrast / 255);
+    d[i] = d[i + 1] = d[i + 2] = 0;
+    d[i + 3] = Math.round(Math.max(0, -2 * v) * 255);
+  }
+  cx.putImageData(img, 0, 0);
+  grainW.style.backgroundImage = `url(${c.toDataURL()})`;
+  grainW.style.backgroundRepeat = 'repeat';
+}
+bakeTiles();
+function sizeGrain() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  grainW.style.backgroundSize = `${(TILE * P.grainSize) / dpr}px ${(TILE * P.grainSize) / dpr}px`;
+}
+let lastGrain = -1;
+const grainShift = { x: 0, y: 0, flick: 0 };   // read by the finishing pass
+function drawGrain() {
+  // a new throw of the grain: the finishing pass uses it for the forest and sky
+  grainShift.x = Math.floor(Math.random() * 256); grainShift.y = Math.floor(Math.random() * 256);
+  grainShift.flick = Math.random() * P.grainFlicker;
+  // the page layer only carries grain onto the white, so it rests until the wash begins
+  const white = washNow > 0.01;
+  grainW.style.display = white ? '' : 'none';
+  if (!white) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2), cell = P.grainSize / dpr;
+  grainW.style.backgroundPosition = `${Math.floor(Math.random() * TILE) * cell}px ${Math.floor(Math.random() * TILE) * cell}px`;
+  grainW.style.opacity = (P.grainOpacity * 0.8 * washNow).toFixed(3);
+}
+addEventListener('resize', () => { sizeGrain(); drawGrain(); });
+sizeGrain();
+drawGrain();
+
+// ---- finishing pass -----------------------------------------------------------
+// The forest is drawn into a buffer of its own, and then one full-screen shader
+// puts it on the canvas with the whole look laid over it: the faded-print grade (the same sums the
+// old CSS filter did), the warm wash, the drifting light leak and the film grain.
+// These used to be separate page layers with blend modes; on a big window the
+// browser spent more time stacking them than the GPU spent on the trees.
+// The forest's buffer is smaller than the canvas and is stretched to it here. The
+// cost of the forest is almost entirely the number of pixels it covers, so on a
+// large window its buffer is held to a fixed budget of pixels; on an ordinary
+// window it is drawn exactly as sharp as it always was. The grain is drawn here at
+// the canvas's own resolution, so it stays pin-sharp whatever the forest's size.
+const SCALE_TOP = Math.min(1, 1.75 / CANVAS_PR);   // the sharpness the forest has always had
+const SCENE_PIXELS = 2.4e6;                         // and the most pixels it is ever drawn at
+const sceneScaleFor = (W, H) => (QS.has('scale') ? Number(QS.get('scale')) : Math.min(SCALE_TOP, Math.sqrt(SCENE_PIXELS / (W * H))));
+// The buffer behaves exactly like the screen: marking it as an "XR" target is how
+// three.js (pinned at r170) is told to tone-map and sRGB-encode into it just as it
+// does for the canvas, so every shader and material keeps producing the very same
+// colours as before. RGBA8 is forced so nothing is converted a second time.
+let sceneRT = null;
+function sceneBuffer(w, h) {
+  if (sceneRT && sceneRT.width === w && sceneRT.height === h) return sceneRT;
+  if (sceneRT) sceneRT.dispose();
+  sceneRT = new THREE.WebGLRenderTarget(w, h, { samples: 4, depthBuffer: true, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, generateMipmaps: false });
+  sceneRT.isXRRenderTarget = true;
+  sceneRT.texture.colorSpace = THREE.SRGBColorSpace;
+  sceneRT.texture.internalFormat = 'RGBA8';
+  sceneRT.scissorTest = true;
+  return sceneRT;
+}
+const noiseTex = (() => {
+  const N = 256, data = new Uint8Array(N * N);
+  for (let i = 0; i < data.length; i++) data[i] = Math.floor(Math.random() * 256);
+  const tx = new THREE.DataTexture(data, N, N, THREE.RedFormat);
+  tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+  tx.magFilter = tx.minFilter = THREE.NearestFilter;
+  tx.needsUpdate = true;
+  return tx;
+})();
+const GRAIN_BLENDS = ['soft-light', 'hard-light', 'overlay', 'multiply', 'normal'];
+const postMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false,
+  uniforms: {
+    uFrame: { value: null }, uNoise: { value: noiseTex },
+    uScale: { value: new THREE.Vector2(1, 1) }, uTexel: { value: new THREE.Vector2(1, 1) },
+    uGrade: { value: new THREE.Vector4(1, 1, 0, 1) },    // saturate, contrast, sepia, brightness
+    uWash: { value: 0 }, uLeak: { value: 0 }, uLeakE: { value: 0 },
+    uGrain: { value: new THREE.Vector4(0, 1, 0.5, 0) },  // opacity, speck size in canvas pixels, contrast, blend
+    uGrainOff: { value: new THREE.Vector2() },
+  },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D uFrame, uNoise; uniform vec2 uScale, uTexel, uGrainOff; uniform vec4 uGrade, uGrain;
+    uniform float uWash, uLeak, uLeakE;
+    varying vec2 vUv;
+    float softD(float b) { return b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : sqrt(b); }
+    float softLight(float b, float s) { return s <= 0.5 ? b - (1.0 - 2.0 * s) * b * (1.0 - b) : b + (2.0 * s - 1.0) * (softD(b) - b); }
+    float hardLight(float b, float s) { return s <= 0.5 ? b * 2.0 * s : 1.0 - (1.0 - b) * (2.0 - 2.0 * s); }
+    void main() {
+      vec3 c = texture2D(uFrame, min(vUv * uScale, uScale - 0.5 * uTexel)).rgb;
+      // the grade: saturate, contrast, sepia, brightness, in that order, as the CSS filter did them
+      float s = uGrade.x, q = 1.0 - uGrade.z;
+      c = clamp(mat3(0.213 + 0.787 * s, 0.213 - 0.213 * s, 0.213 - 0.213 * s,
+                     0.715 - 0.715 * s, 0.715 + 0.285 * s, 0.715 - 0.715 * s,
+                     0.072 - 0.072 * s, 0.072 - 0.072 * s, 0.072 + 0.928 * s) * c, 0.0, 1.0);
+      c = clamp((c - 0.5) * uGrade.y + 0.5, 0.0, 1.0);
+      c = clamp(mat3(0.393 + 0.607 * q, 0.349 - 0.349 * q, 0.272 - 0.272 * q,
+                     0.769 - 0.769 * q, 0.686 + 0.314 * q, 0.534 - 0.534 * q,
+                     0.189 - 0.189 * q, 0.168 - 0.168 * q, 0.131 + 0.869 * q) * c, 0.0, 1.0);
+      c = clamp(c * uGrade.w, 0.0, 1.0);
+      // the warm wash: an amber gradient, top to bottom, screened on
+      vec2 p = vec2(vUv.x, 1.0 - vUv.y);   // page coordinates, y downward
+      vec3 wash = mix(vec3(1.0, 0.8392, 0.5882) * 0.16, vec3(1.0, 0.7451, 0.4706) * 0.10, p.y);
+      c += wash * uWash * (1.0 - c);
+      // the light leak: a glow from the upper right that drifts and swells, screened on
+      vec2 lp = (p - 0.5 - vec2(-0.06, 0.08) * uLeakE) / (1.0 + 0.15 * uLeakE) + 0.5;
+      if (lp.x >= 0.0 && lp.x <= 1.0 && lp.y >= 0.0 && lp.y <= 1.0) {
+        float r = length((lp - vec2(0.88, 0.10)) / vec2(0.6, 0.5));
+        vec3 l0 = vec3(1.0, 0.5882, 0.2353) * 0.42, l1 = vec3(1.0, 0.4706, 0.1961) * 0.12;
+        vec3 leak = r < 0.4 ? mix(l0, l1, r / 0.4) : mix(l1, vec3(0.0), clamp((r - 0.4) / 0.3, 0.0, 1.0));
+        c += leak * uLeak * (1.0 - c);
+      }
+      // film grain: fine specks, thrown afresh many times a second
+      float g = texture2D(uNoise, (floor(gl_FragCoord.xy / uGrain.y) + uGrainOff + 0.5) / 256.0).r;
+      float n = clamp(0.502 + (g - 0.5) * uGrain.z, 0.0, 1.0);
+      vec3 gr;
+      if (uGrain.w < 0.5) gr = vec3(softLight(c.r, n), softLight(c.g, n), softLight(c.b, n));
+      else if (uGrain.w < 1.5) gr = vec3(hardLight(c.r, n), hardLight(c.g, n), hardLight(c.b, n));
+      else if (uGrain.w < 2.5) gr = vec3(hardLight(n, c.r), hardLight(n, c.g), hardLight(n, c.b));
+      else if (uGrain.w < 3.5) gr = c * n;
+      else gr = vec3(n);
+      c = mix(c, gr, clamp(uGrain.x, 0.0, 1.0));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+const postScene = new THREE.Scene();
+const postCam = new THREE.Camera();
+const postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat);
+postQuad.frustumCulled = false;
+postScene.add(postQuad);
+function drawStage(t) {
+  const W = canvas.width, H = canvas.height;
+  if (!W || !H) return;
+  const k = sceneScaleFor(W, H), sw = Math.max(2, Math.round(W * k)), sh = Math.max(2, Math.round(H * k));
+  const rt = sceneBuffer(sw, sh);
+  rt.viewport.set(0, 0, sw, sh);
+  rt.scissor.set(0, 0, sw, sh);
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, camera);
+  // then the finished picture onto the canvas
+  renderer.setRenderTarget(null);
+  const U = postMat.uniforms;
+  U.uFrame.value = rt.texture;
+  U.uScale.value.set(sw / rt.width, sh / rt.height);
+  U.uTexel.value.set(1 / rt.width, 1 / rt.height);
+  U.uGrade.value.set(P.saturate, P.contrast, P.sepia, P.brightness);
+  U.uWash.value = P.wash;
+  U.uLeak.value = P.leak;
+  const swing = (t % 28) / 14, half = swing > 1 ? 2 - swing : swing;   // 14 seconds out, 14 back
+  U.uLeakE.value = reduceMotion ? 0 : half * half * (3 - 2 * half);
+  U.uGrain.value.set(P.grainOpacity + grainShift.flick, P.grainSize * (CANVAS_PR / Math.min(devicePixelRatio || 1, 2)), P.grainContrast / 255, Math.max(0, GRAIN_BLENDS.indexOf(P.grainBlend)));
+  U.uGrainOff.value.set(grainShift.x, grainShift.y);
+  renderer.render(postScene, postCam);
+}
+let framesDrawn = 0;
+const clock = new THREE.Clock();
+const dirV = new THREE.Vector3(), target = new THREE.Vector3();
+let windClock = 0;
+function frame() {
+  const t = clock.getElapsedTime();
+  const dt = Math.min(0.05, t - lastT); lastT = t;
+  const yBefore = camera.position.y;
+  windClock += dt * P.windSpeed;
+  leafMat.uniforms.uTime.value = windClock;
+  leafMat.uniforms.uWind.value = reduceMotion ? 0 : P.wind;
+  if (!reduceMotion && P.grainFps > 0 && t - lastGrain >= 1 / P.grainFps) { lastGrain = t; drawGrain(); }
+
+  // the flight waits for the first frames to be on screen, so it is never missed
+  if (!flight && autoAt !== null && t >= autoAt && framesDrawn >= 2) launch();
+  let roll = 0;
+  if (flight) {
+    // the flight advances by drawn frames, never by the wall clock: a slow frame
+    // (shaders compiling, the tab waking) holds it for a moment instead of skipping it ahead
+    flight.elapsed += dt;
+    const el = flight.elapsed;
+    const u = QS.has('u') ? Number(QS.get('u')) : Math.min(1, el / P.flight);   // ?u=0.4 holds the flight at that point, for testing
+    const e = ease(u);
+    camera.position.y = flight.from + (GROUND_Y + RISE - flight.from) * e;
+    roll = reduceMotion ? 0 : u * u * P.spiral;        // slow spiral as it climbs
+    const baseFov = innerWidth > innerHeight ? 96 : 108;
+    camera.fov = baseFov - P.tighten * Math.pow(u, 1.6); // tightening toward the sky
+    camera.updateProjectionMatrix();
+    // landed in the blue: scrolling is unlocked and now drives the wash
+    if (u >= 1 && !landed) {
+      landed = true;
+      document.documentElement.classList.remove('locked');
+      scrollcue.classList.add('show');
+      menu.classList.add('show');
+    }
+    const wash = washProgress(); // 0 at the top of the page, 1 after a screen-height of scroll
+    washNow = smoother(wash);
+    // one even brightening of the whole sky, eased in and out so it neither starts
+    // nor lands abruptly however the visitor scrolls
+    sky.material.uniforms.uLift.value = smoother(wash);
+    inkFor(sstep(0.0, 0.45, wash)); // the words turn with the sky
+    if (scrollY > 24) scrollcue.classList.remove('show'); else if (landed) scrollcue.classList.add('show');
+    // the words in the sky fade out as the page is scrolled, so they never sit over the work
+    // and shrink to half size; scrolling back up grows them from 0.5x into view
+    const gone = Math.min(1, Math.max(0, scrollY / (innerHeight * 0.35)));
+    if (gone > 0) { msg.style.transition = 'none'; msg.style.opacity = (1 - gone).toFixed(3); msg.style.transform = `scale(${(1 - 0.5 * gone).toFixed(3)})`; }
+    else if (msg.style.transition) { msg.style.transition = ''; msg.style.opacity = ''; msg.style.transform = ''; }
+    if (u > 0.5) vignette.classList.add('lift');
+    if (camera.position.y >= SKY_AT && skyStart === null) {
+      skyStart = t;
+      say('hello fall');
+    }
+    // each puff fades out as it passes right through the lens, so a cloud reads
+    // as wisps streaming past rather than a white wall
+    // and they melt away as the sky brightens, so no grey smudges are left on the white
+    const cloudFade = 1 - sky.material.uniforms.uLift.value;
+    for (const { sp, base } of puffs) { sp.material.opacity = base * P.clouds * cloudFade * sstep(0.4, 4.5, sp.position.distanceTo(camera.position)); sp.visible = sp.material.opacity > 0.004; }
+    // the flat white layer only settles in over the last stretch, once the sky is
+    // already nearly white, so its arrival cannot be seen
+    flash.classList.add('on');
+    flash.style.opacity = smoother((wash - 0.55) / 0.45).toFixed(3);
+    // replay waits on the white, at the end of the wash
+    replay.classList.toggle('show', landed && scrollY > innerHeight * 0.6);   // once the hero has been scrolled away
+  } else {
+    // at rest the slider sets how far up the trunks the viewer floats
+    const goalY = heightFor(heightPct);
+    camera.position.y += (goalY - camera.position.y) * (reduceMotion ? 1 : 0.07);
+  }
+  if (!flight && !reduceMotion) {
+    // lying still: a breath of drift
+    lookNow.x = Math.sin(t * 0.23) * 0.05 * P.drift;
+    lookNow.y = Math.cos(t * 0.19) * 0.04 * P.drift;
+  }
+
+  const idle = flight ? 0.35 : 1;
+  dirV.set(lookNow.x * 0.14 * idle, 1, lookNow.y * 0.14 * idle).normalize();
+  target.copy(camera.position).add(dirV);
+  camera.up.set(Math.sin(roll), 0, -Math.cos(roll));
+  camera.lookAt(target);
+  // entering 100%: the camera has just risen through the treetops
+  const topY = heightFor(1) - 0.5; // a touch early, since the slider eases in and never quite lands
+  if (yBefore < topY && camera.position.y >= topY) heroDue = true;
+  flyLeaves(t, dt, camera.position.y >= topY);
+
+  // once the page has washed fully to white the stage is completely covered, so it rests
+  if (!(landed && washNow >= 0.999)) {
+    if (QS.has('time')) {   // testing only: how long the drawing itself takes, GPU included
+      const t0 = performance.now(); drawStage(t); renderer.getContext().finish();
+      (window.__stageMs = window.__stageMs || []).push(performance.now() - t0);
+    } else if (QS.has('reps')) { for (let i = 0; i < Number(QS.get('reps')); i++) drawStage(t); }   // testing only: draw several times over, to find the headroom
+    else drawStage(t);
+  }
+  if (!BOOT.first) { renderer.getContext().finish(); BOOT.first = performance.now(); }
+  framesDrawn++;
+  requestAnimationFrame(frame);
+}
+BOOT.built = performance.now();
+frame();
+
+// ---- dials ---------------------------------------------------------------------
+// A tuning panel, only built when the address ends in #dials. Every row is a
+// slider you drag across; values persist in this browser until Reset. Nothing
+// here runs for ordinary visitors.
+function applyLook() {
+  // the grade, wash, leak and grain are read straight from P by the finishing pass every frame
+  vignette.style.setProperty('--vig', P.vignette);
+}
+applyLook();
+if (location.hash.includes('dials')) {
+  try { Object.assign(P, JSON.parse(localStorage.getItem('fall-dials') || '{}')); } catch (e) { /* storage blocked: start from defaults */ }
+  const GROUPS = [
+    ['Grain', [
+      ['grainOpacity', 'opacity', 0, 0.8, 0.01],
+      ['grainFlicker', 'flicker', 0, 0.3, 0.01],
+      ['grainSize', 'speck size', 1, 5, 0.5, () => { sizeGrain(); drawGrain(); }],
+      ['grainContrast', 'contrast', 0, 255, 1, () => { bakeTiles(); drawGrain(); }],
+      ['grainFps', 'frames per second', 0, 60, 1],
+      ['grainBlend', 'blend', ['hard-light', 'overlay', 'soft-light', 'multiply', 'normal']],
+    ]],
+    ['Faded print', [
+      ['saturate', 'saturation', 0, 1.5, 0.01],
+      ['contrast', 'contrast', 0.5, 1.5, 0.01],
+      ['sepia', 'sepia', 0, 1, 0.01],
+      ['brightness', 'brightness', 0.6, 1.4, 0.01],
+      ['wash', 'amber wash', 0, 2, 0.01],
+      ['leak', 'light leak', 0, 1, 0.01],
+      ['vignette', 'vignette', 0, 1, 0.01],
+    ]],
+    ['Movement', [
+      ['wind', 'wind strength', 0, 4, 0.05],
+      ['windSpeed', 'wind speed', 0, 4, 0.05],
+      ['flight', 'climb, seconds', 2, 14, 0.1],
+      ['spiral', 'spiral', 0, 2, 0.01],
+      ['tighten', 'lens tighten', 0, 50, 1],
+      ['drift', 'idle drift', 0, 6, 0.1],
+      ['clouds', 'clouds', 0, 3, 0.05],
+    ]],
+    ['Loose leaves', [
+      ['leafCount', 'how many', 0, 30, 1],
+      ['leafFall', 'fall speed', 0.2, 4, 0.05],
+      ['leafSway', 'sway', 0, 3, 0.05],
+      ['leafSize', 'size', 0.4, 3, 0.05],
+    ]],
+  ];
+  const css = document.createElement('style');
+  css.textContent = `
+    .dk { position: fixed; top: 14px; left: 14px; z-index: 60; width: 264px; max-height: calc(100vh - 28px); overflow: auto; overscroll-behavior: contain;
+      background: rgba(22, 22, 24, 0.9); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: #f2f2f2; border-radius: 16px; padding: 8px;
+      font: 500 12px/1 'Inter', system-ui, sans-serif; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); cursor: default; user-select: none; -webkit-user-select: none; }
+    .dk * { box-sizing: border-box; }
+    .dk-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 10px; font-weight: 600; letter-spacing: 0.01em; }
+    .dk-head button { all: unset; cursor: pointer; opacity: 0.6; padding: 4px 6px; border-radius: 6px; }
+    .dk-head button:hover { opacity: 1; background: rgba(255, 255, 255, 0.08); }
+    .dk-group { margin-top: 4px; }
+    .dk-group > summary { list-style: none; cursor: pointer; padding: 9px 8px; border-radius: 9px; font-weight: 600; opacity: 0.85; display: flex; justify-content: space-between; }
+    .dk-group > summary::-webkit-details-marker { display: none; }
+    .dk-group > summary::after { content: '+'; opacity: 0.5; }
+    .dk-group[open] > summary::after { content: '−'; }
+    .dk-group > summary:hover { background: rgba(255, 255, 255, 0.06); }
+    .dk-row { position: relative; height: 34px; margin: 4px 0; border-radius: 9px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+    .dk-fill { position: absolute; inset: 0 auto 0 0; background: rgba(255, 255, 255, 0.13); pointer-events: none; }
+    .dk-row:hover .dk-fill { background: rgba(255, 255, 255, 0.19); }
+    .dk-label, .dk-val { position: absolute; top: 0; height: 34px; line-height: 34px; pointer-events: none; }
+    .dk-label { left: 11px; opacity: 0.78; }
+    .dk-val { right: 11px; font-variant-numeric: tabular-nums; }
+    .dk-row input[type=range] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+    .dk-row select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font: inherit; }
+    .dk-row:focus-within { outline: 1px solid rgba(255, 255, 255, 0.5); }
+    .dk-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 8px; }
+    .dk-actions button { all: unset; text-align: center; height: 34px; line-height: 34px; border-radius: 9px; background: rgba(255, 255, 255, 0.1); cursor: pointer; font-weight: 600; }
+    .dk-actions button:hover { background: rgba(255, 255, 255, 0.2); }
+    .dk.min .dk-body { display: none; }`;
+  document.head.appendChild(css);
+
+  const panel = document.createElement('div');
+  panel.className = 'dk';
+  panel.innerHTML = '<div class="dk-head"><span>Dials</span><button type="button" data-min>hide</button></div><div class="dk-body"></div>';
+  const body = panel.querySelector('.dk-body');
+  const refreshers = [];
+  const save = () => { try { localStorage.setItem('fall-dials', JSON.stringify(P)); } catch (e) { /* ignore */ } };
+  const places = (step) => (String(step).split('.')[1] || '').length;
+  GROUPS.forEach(([title, rows], gi) => {
+    const group = document.createElement('details');
+    group.className = 'dk-group';
+    group.open = gi < 3;
+    group.innerHTML = `<summary>${title}</summary>`;
+    for (const [key, label, a, b, step, after] of rows) {
+      const row = document.createElement('div');
+      row.className = 'dk-row';
+      if (Array.isArray(a)) {
+        row.innerHTML = `<span class="dk-label">${label}</span><span class="dk-val"></span><select aria-label="${label}">${a.map((o) => `<option>${o}</option>`).join('')}</select>`;
+        const sel = row.querySelector('select'), val = row.querySelector('.dk-val');
+        const show = () => { sel.value = P[key]; val.textContent = P[key]; };
+        sel.addEventListener('change', () => { P[key] = sel.value; show(); applyLook(); save(); });
+        refreshers.push(show);
+      } else {
+        row.innerHTML = `<div class="dk-fill"></div><span class="dk-label">${label}</span><span class="dk-val"></span><input type="range" min="${a}" max="${b}" step="${step}" aria-label="${label}">`;
+        const input = row.querySelector('input'), val = row.querySelector('.dk-val'), fill = row.querySelector('.dk-fill');
+        const show = () => {
+          input.value = P[key];
+          val.textContent = Number(P[key]).toFixed(places(step));
+          fill.style.width = `${((P[key] - a) / (b - a)) * 100}%`;
+        };
+        input.addEventListener('input', () => { P[key] = Number(input.value); show(); applyLook(); if (after) after(); save(); });
+        // double-click a row to put it back to the shipped value
+        row.addEventListener('dblclick', () => { P[key] = DEFAULTS[key]; show(); applyLook(); if (after) after(); save(); });
+        refreshers.push(show);
+      }
+      group.appendChild(row);
+    }
+    body.appendChild(group);
+  });
+  const actions = document.createElement('div');
+  actions.className = 'dk-actions';
+  actions.innerHTML = '<button type="button" data-replay>replay</button><button type="button" data-copy>copy</button><button type="button" data-reset>reset</button>';
+  body.appendChild(actions);
+  const refreshAll = () => { refreshers.forEach((f) => f()); applyLook(); bakeTiles(); sizeGrain(); drawGrain(); };
+  actions.querySelector('[data-replay]').addEventListener('click', () => land());
+  actions.querySelector('[data-copy]').addEventListener('click', async (e) => {
+    const text = JSON.stringify(P, null, 2);
+    try { await navigator.clipboard.writeText(text); e.target.textContent = 'copied'; }
+    catch (err) { console.log(text); e.target.textContent = 'in console'; }
+    setTimeout(() => { e.target.textContent = 'copy'; }, 1200);
+  });
+  actions.querySelector('[data-reset]').addEventListener('click', () => { Object.assign(P, DEFAULTS); try { localStorage.removeItem('fall-dials'); } catch (e) { /* ignore */ } refreshAll(); });
+  panel.querySelector('[data-min]').addEventListener('click', (e) => { panel.classList.toggle('min'); e.target.textContent = panel.classList.contains('min') ? 'show' : 'hide'; });
+  // the panel never starts music, scrolls the page, or reaches the scene
+  for (const ty of ['pointerdown', 'keydown', 'wheel']) panel.addEventListener(ty, (e) => e.stopPropagation());
+  document.body.appendChild(panel);
+  refreshAll();
+}
+</script>
+</body>
+</html>
